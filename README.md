@@ -1,0 +1,1 @@
+# claude-blocker-vscode
