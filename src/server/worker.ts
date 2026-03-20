@@ -34,7 +34,13 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://localhost:${port}`);
 
   if (req.method === "GET" && url.pathname === "/status") {
-    sendJson(res, state.getStatus());
+    const s = state.getStatus();
+    sendJson(res, {
+      blocked: s.blocked,
+      sessions: s.sessions,
+      working: s.sessions.filter(x => x.status === "working").length,
+      waitingForInput: s.sessions.filter(x => x.status === "waiting_for_input").length,
+    });
     return;
   }
 
@@ -67,20 +73,31 @@ const server = createServer(async (req, res) => {
   sendJson(res, { error: "Not found" }, 404);
 });
 
+// Build a WebSocket state message compatible with both Chrome extensions:
+// - Advanced: reads `sessions` as Session[] array (required for full functionality)
+// - T3 (original): reads `sessions` expecting a number — will show [object Object] in popup
+//   but blocking logic still works correctly (uses `working`/`waitingForInput` fields)
+function makeWsState(blocked: boolean, sessions: ReturnType<typeof state.getStatus>["sessions"], working: number, waitingForInput: number) {
+  return {
+    type: "state",
+    blocked,
+    sessions,
+    working,
+    waitingForInput,
+  };
+}
+
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (ws: WebSocket) => {
   const { blocked, sessions } = state.getStatus();
   const working = sessions.filter(s => s.status === "working").length;
   const waitingForInput = sessions.filter(s => s.status === "waiting_for_input").length;
-  ws.send(JSON.stringify({ type: "state", blocked, sessions, working, waitingForInput }));
+  ws.send(JSON.stringify(makeWsState(blocked, sessions, working, waitingForInput)));
 
   const unsubscribe = state.subscribe((message) => {
     if (message.type === "state-change" && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: "state", blocked: message.blocked, sessions: message.sessions,
-        working: message.working, waitingForInput: message.waitingForInput,
-      }));
+      ws.send(JSON.stringify(makeWsState(message.blocked, message.sessions, message.working, message.waitingForInput)));
     }
   });
 

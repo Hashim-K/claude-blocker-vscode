@@ -29,6 +29,13 @@ export class StatusBar {
   private update(server: ServerManager, blocker: Blocker, pomodoro: Pomodoro): void {
     const s = server.status;
 
+    if (s.state === "starting") {
+      this.item.text = "$(loading~spin) CB: Starting...";
+      this.item.tooltip = "Server is starting up";
+      this.item.backgroundColor = undefined;
+      return;
+    }
+
     if (s.state !== "running") {
       this.item.text = "$(error) CB: Stopped";
       this.item.tooltip = s.error || "Server not running";

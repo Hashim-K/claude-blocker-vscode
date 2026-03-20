@@ -169,7 +169,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     // Status badge
     let statusIcon: string, statusText: string, statusClass: string;
-    if (s.state !== "running") {
+    if (s.state === "starting") {
+      statusIcon = "◌"; statusText = "Starting..."; statusClass = "starting";
+    } else if (s.state !== "running") {
       statusIcon = "○"; statusText = `Server ${s.state}`; statusClass = "error";
     } else if (pState.running) {
       const label = pState.phase === "active" ? "Focus" : "Break";
@@ -265,6 +267,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   .status-banner.active { background: var(--vscode-inputValidation-infoBackground, rgba(80,160,255,0.15)); }
   .status-banner.break { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.15)); }
   .status-banner.error { background: var(--vscode-inputValidation-errorBackground, rgba(255,80,80,0.15)); }
+  .status-banner.starting { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.1)); opacity: 0.7; }
 
   /* Section labels */
   .section-label {
