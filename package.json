@@ -1,40 +1,138 @@
 {
-  "name": "claude-blocker",
+  "name": "claude-blocker-vscode",
   "displayName": "Claude Blocker",
-  "description": "Claude Blocker Extension for VS Code",
-  "version": "0.0.1",
-  "engines": {
-    "vscode": "^1.110.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [],
+  "description": "Block distracting websites when Claude Code isn't working. Pause, suspend, pomodoro, stats.",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.110.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "claude-blocker.helloWorld",
-        "title": "Hello World"
+      { "command": "claude-blocker.startServer", "title": "Claude Blocker: Start Server" },
+      { "command": "claude-blocker.stopServer", "title": "Claude Blocker: Stop Server" },
+      { "command": "claude-blocker.pause", "title": "Claude Blocker: Pause" },
+      { "command": "claude-blocker.resume", "title": "Claude Blocker: Resume" },
+      { "command": "claude-blocker.suspend", "title": "Claude Blocker: Suspend for X Minutes..." },
+      { "command": "claude-blocker.startPomodoro", "title": "Claude Blocker: Start Pomodoro" },
+      { "command": "claude-blocker.stopPomodoro", "title": "Claude Blocker: Stop Pomodoro" },
+      { "command": "claude-blocker.togglePomodoro", "title": "Claude Blocker: Toggle Pomodoro" },
+      { "command": "claude-blocker.toggleSound", "title": "Claude Blocker: Toggle Sound" },
+      { "command": "claude-blocker.showStats", "title": "Claude Blocker: Show Stats" },
+      { "command": "claude-blocker.setupHooks", "title": "Claude Blocker: Setup Hooks" },
+      { "command": "claude-blocker.removeHooks", "title": "Claude Blocker: Remove Hooks" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claude-blocker",
+          "title": "Claude Blocker",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "claude-blocker": [
+        { "id": "claude-blocker.status", "name": "Status" },
+        { "id": "claude-blocker.controls", "name": "Controls" },
+        { "id": "claude-blocker.stats", "name": "Stats" },
+        { "id": "claude-blocker.setup", "name": "Setup" }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Blocker",
+      "properties": {
+        "claudeBlocker.port": {
+          "type": "number",
+          "default": 8765,
+          "description": "Server port"
+        },
+        "claudeBlocker.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start server on extension activation"
+        },
+        "claudeBlocker.pomodoro.activeMinutes": {
+          "type": "number",
+          "default": 25,
+          "description": "Pomodoro active phase duration (minutes)"
+        },
+        "claudeBlocker.pomodoro.breakMinutes": {
+          "type": "number",
+          "default": 5,
+          "description": "Pomodoro break phase duration (minutes)"
+        },
+        "claudeBlocker.suspendPresets": {
+          "type": "array",
+          "items": { "type": "number" },
+          "default": [5, 10, 15, 30],
+          "description": "Suspend duration presets (minutes)"
+        },
+        "claudeBlocker.notifications.sound.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable sound notifications"
+        },
+        "claudeBlocker.notifications.sound.volume": {
+          "type": "number",
+          "default": 70,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Sound volume (0-100)"
+        },
+        "claudeBlocker.notifications.sound.onStopWorking": {
+          "type": "string",
+          "enum": ["none", "subtle", "clear", "alarm"],
+          "default": "subtle",
+          "description": "Sound when Claude stops working"
+        },
+        "claudeBlocker.notifications.sound.onWaitingForInput": {
+          "type": "string",
+          "enum": ["none", "subtle", "clear", "alarm"],
+          "default": "subtle",
+          "description": "Sound when Claude waits for input"
+        },
+        "claudeBlocker.notifications.sound.onPomodoroSwitch": {
+          "type": "string",
+          "enum": ["none", "subtle", "clear", "alarm"],
+          "default": "alarm",
+          "description": "Sound on pomodoro phase change"
+        },
+        "claudeBlocker.notifications.sound.onSuspendExpired": {
+          "type": "string",
+          "enum": ["none", "subtle", "clear", "alarm"],
+          "default": "subtle",
+          "description": "Sound when suspend timer expires"
+        },
+        "claudeBlocker.notifications.toast.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable toast notifications"
+        }
       }
-    ]
+    }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "compile": "node esbuild.mjs",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test"
   },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
   "devDependencies": {
-    "@types/vscode": "^1.110.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "typescript-eslint": "^8.56.1",
+    "@types/vscode": "^1.110.0",
+    "@types/ws": "^8.18.1",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.27.4",
     "eslint": "^9.39.3",
     "typescript": "^5.9.3",
-    "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2"
+    "typescript-eslint": "^8.56.1"
   }
 }

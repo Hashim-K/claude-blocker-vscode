@@ -1,26 +1,167 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
+import { ServerManager } from "./server.js";
+import { Blocker } from "./blocker.js";
+import { Pomodoro } from "./pomodoro.js";
+import { NotificationManager } from "./notifications.js";
+import { StatsTracker } from "./stats.js";
+import { StatusBar } from "./ui/statusBar.js";
+import { SidebarProvider } from "./ui/sidebarProvider.js";
+import { areHooksConfigured, setupHooks, removeHooks } from "./hooks.js";
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
+  const config = vscode.workspace.getConfiguration("claudeBlocker");
+  const port = config.get<number>("port", 8765);
+  const autoStart = config.get<boolean>("autoStart", true);
+  const activeMin = config.get<number>("pomodoro.activeMinutes", 25);
+  const breakMin = config.get<number>("pomodoro.breakMinutes", 5);
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "claude-blocker" is now active!');
+  const server = new ServerManager(context.extensionPath, port);
+  const blocker = new Blocker(server);
+  const pomodoro = new Pomodoro(blocker, activeMin, breakMin);
+  const notifications = new NotificationManager(context.extensionPath);
+  const stats = new StatsTracker(context.globalState, server);
+  const statusBar = new StatusBar(server, blocker, pomodoro);
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('claude-blocker.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from Claude Blocker!');
-	});
+  // Create separate sidebar providers for each view
+  const statusProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
+  statusProvider.setViewId("claude-blocker.status");
+  const controlsProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
+  controlsProvider.setViewId("claude-blocker.controls");
+  const statsProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
+  statsProvider.setViewId("claude-blocker.stats");
+  const setupProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
+  setupProvider.setViewId("claude-blocker.setup");
 
-	context.subscriptions.push(disposable);
+  vscode.window.registerTreeDataProvider("claude-blocker.status", statusProvider);
+  vscode.window.registerTreeDataProvider("claude-blocker.controls", controlsProvider);
+  vscode.window.registerTreeDataProvider("claude-blocker.stats", statsProvider);
+  vscode.window.registerTreeDataProvider("claude-blocker.setup", setupProvider);
+
+  const refreshAll = () => {
+    statusProvider.refresh();
+    controlsProvider.refresh();
+    statsProvider.refresh();
+    setupProvider.refresh();
+  };
+
+  // Notification triggers
+  let prevWorking = 0;
+  let prevWaiting = 0;
+  server.onStateChange((status) => {
+    if (status.state !== "running") return;
+    if (prevWorking > 0 && status.working === 0 && blocker.state === "active") {
+      notifications.onStopWorking();
+    }
+    if (prevWaiting === 0 && status.waitingForInput > 0) {
+      notifications.onWaitingForInput();
+    }
+    prevWorking = status.working;
+    prevWaiting = status.waitingForInput;
+  });
+
+  pomodoro.onPhaseChange((phase) => {
+    notifications.onPomodoroSwitch(phase);
+    if (phase === "active") stats.recordPomodoro();
+  });
+
+  blocker.onSuspendExpired(() => notifications.onSuspendExpired());
+
+  // Commands
+  const cmds: [string, () => void | Promise<void>][] = [
+    ["claude-blocker.startServer", () => server.start()],
+    ["claude-blocker.stopServer", () => server.stop()],
+    ["claude-blocker.pause", () => { blocker.pause(); stats.recordPause(); }],
+    ["claude-blocker.resume", () => blocker.resume()],
+    ["claude-blocker.suspend", async () => {
+      const presets = config.get<number[]>("suspendPresets", [5, 10, 15, 30]);
+      const items = [...presets.map(m => ({ label: `${m} minutes`, value: m })), { label: "Custom...", value: -1 }];
+      const picked = await vscode.window.showQuickPick(items, { placeHolder: "Suspend for how long?" });
+      if (!picked) return;
+      let minutes = picked.value;
+      if (minutes === -1) {
+        const input = await vscode.window.showInputBox({ prompt: "Minutes", validateInput: v => isNaN(Number(v)) ? "Enter a number" : null });
+        if (!input) return;
+        minutes = Number(input);
+      }
+      blocker.suspend(minutes);
+      stats.recordPause();
+    }],
+    ["claude-blocker.startPomodoro", () => pomodoro.start()],
+    ["claude-blocker.stopPomodoro", () => pomodoro.stop()],
+    ["claude-blocker.togglePomodoro", () => pomodoro.toggle()],
+    ["claude-blocker.toggleSound", () => {
+      notifications.toggleSound();
+      vscode.window.showInformationMessage(`Sound ${notifications.soundEnabled ? "enabled" : "disabled"}`);
+    }],
+    ["claude-blocker.showStats", () => {
+      const today = stats.getToday();
+      const all = stats.getAllTime();
+      const fmt = (ms: number) => `${Math.floor(ms / 60000)}m`;
+      vscode.window.showInformationMessage(
+        `Today: ${fmt(today.blockingMs)} blocked, ${today.sessionCount} sessions, ${today.pomodoroCount} pomodoros | ` +
+        `All time: ${fmt(all.blockingMs)} blocked, ${all.sessionCount} sessions over ${all.days} days`
+      );
+    }],
+    ["claude-blocker.setupHooks", () => { setupHooks(port); vscode.window.showInformationMessage("Claude Blocker hooks installed"); refreshAll(); }],
+    ["claude-blocker.removeHooks", () => { removeHooks(); vscode.window.showInformationMessage("Claude Blocker hooks removed"); refreshAll(); }],
+    ["claude-blocker.quickPick", async () => {
+      const isPaused = blocker.state !== "active";
+      const isPom = pomodoro.state.running;
+      const items = [
+        isPaused ? { label: "$(play) Resume", cmd: "claude-blocker.resume" }
+                 : { label: "$(debug-pause) Pause", cmd: "claude-blocker.pause" },
+        { label: "$(clock) Suspend...", cmd: "claude-blocker.suspend" },
+        isPom ? { label: "$(primitive-square) Stop Pomodoro", cmd: "claude-blocker.stopPomodoro" }
+              : { label: "$(clock) Start Pomodoro", cmd: "claude-blocker.startPomodoro" },
+        { label: "$(graph) Show Stats", cmd: "claude-blocker.showStats" },
+      ];
+      const picked = await vscode.window.showQuickPick(items, { placeHolder: "Claude Blocker" });
+      if (picked) vscode.commands.executeCommand(picked.cmd);
+    }],
+  ];
+
+  for (const [id, handler] of cmds) {
+    context.subscriptions.push(vscode.commands.registerCommand(id, handler));
+  }
+
+  // Config change listener
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration("claudeBlocker.pomodoro")) {
+      pomodoro.updateSettings(
+        config.get<number>("pomodoro.activeMinutes", 25),
+        config.get<number>("pomodoro.breakMinutes", 5),
+      );
+    }
+  }));
+
+  // Auto-start
+  if (autoStart) server.start();
+
+  // Check hooks
+  const hookStatus = areHooksConfigured(port);
+  if (hookStatus === "not-installed") {
+    vscode.window.showInformationMessage("Claude Blocker needs to configure Claude Code hooks.", "Set up now").then(action => {
+      if (action === "Set up now") { setupHooks(port); vscode.window.showInformationMessage("Hooks installed!"); refreshAll(); }
+    });
+  } else if (hookStatus === "wrong-port") {
+    vscode.window.showWarningMessage(`Claude Blocker hooks are configured for a different port. Update to port ${port}?`, "Update").then(action => {
+      if (action === "Update") { setupHooks(port); refreshAll(); }
+    });
+  }
+
+  // Cleanup
+  context.subscriptions.push({ dispose: () => {
+    statusBar.dispose();
+    pomodoro.dispose();
+    blocker.dispose();
+    stats.dispose();
+    notifications.dispose();
+    statusProvider.dispose();
+    controlsProvider.dispose();
+    statsProvider.dispose();
+    setupProvider.dispose();
+    server.dispose();
+  }});
 }
 
-// This method is called when your extension is deactivated
 export function deactivate() {}
