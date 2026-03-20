@@ -3,24 +3,73 @@
   "displayName": "Claude Blocker",
   "description": "Block distracting websites when Claude Code isn't working. Pause, suspend, pomodoro, stats.",
   "version": "0.1.0",
-  "engines": { "vscode": "^1.110.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "publisher": "hashim-karim",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hashim-karim/claude-blocker-vscode"
+  },
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "claude-blocker.startServer", "title": "Claude Blocker: Start Server" },
-      { "command": "claude-blocker.stopServer", "title": "Claude Blocker: Stop Server" },
-      { "command": "claude-blocker.pause", "title": "Claude Blocker: Pause" },
-      { "command": "claude-blocker.resume", "title": "Claude Blocker: Resume" },
-      { "command": "claude-blocker.suspend", "title": "Claude Blocker: Suspend for X Minutes..." },
-      { "command": "claude-blocker.startPomodoro", "title": "Claude Blocker: Start Pomodoro" },
-      { "command": "claude-blocker.stopPomodoro", "title": "Claude Blocker: Stop Pomodoro" },
-      { "command": "claude-blocker.togglePomodoro", "title": "Claude Blocker: Toggle Pomodoro" },
-      { "command": "claude-blocker.toggleSound", "title": "Claude Blocker: Toggle Sound" },
-      { "command": "claude-blocker.showStats", "title": "Claude Blocker: Show Stats" },
-      { "command": "claude-blocker.setupHooks", "title": "Claude Blocker: Setup Hooks" },
-      { "command": "claude-blocker.removeHooks", "title": "Claude Blocker: Remove Hooks" }
+      {
+        "command": "claude-blocker.startServer",
+        "title": "Claude Blocker: Start Server"
+      },
+      {
+        "command": "claude-blocker.stopServer",
+        "title": "Claude Blocker: Stop Server"
+      },
+      {
+        "command": "claude-blocker.pause",
+        "title": "Claude Blocker: Pause"
+      },
+      {
+        "command": "claude-blocker.resume",
+        "title": "Claude Blocker: Resume"
+      },
+      {
+        "command": "claude-blocker.suspend",
+        "title": "Claude Blocker: Suspend for X Minutes..."
+      },
+      {
+        "command": "claude-blocker.startPomodoro",
+        "title": "Claude Blocker: Start Pomodoro"
+      },
+      {
+        "command": "claude-blocker.stopPomodoro",
+        "title": "Claude Blocker: Stop Pomodoro"
+      },
+      {
+        "command": "claude-blocker.togglePomodoro",
+        "title": "Claude Blocker: Toggle Pomodoro"
+      },
+      {
+        "command": "claude-blocker.toggleSound",
+        "title": "Claude Blocker: Toggle Sound"
+      },
+      {
+        "command": "claude-blocker.showStats",
+        "title": "Claude Blocker: Show Stats"
+      },
+      {
+        "command": "claude-blocker.setupHooks",
+        "title": "Claude Blocker: Setup Hooks"
+      },
+      {
+        "command": "claude-blocker.removeHooks",
+        "title": "Claude Blocker: Remove Hooks"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
@@ -33,7 +82,11 @@
     },
     "views": {
       "claude-blocker": [
-        { "type": "webview", "id": "claude-blocker.panel", "name": "Claude Blocker" }
+        {
+          "type": "webview",
+          "id": "claude-blocker.panel",
+          "name": "Claude Blocker"
+        }
       ]
     },
     "configuration": {
@@ -61,8 +114,15 @@
         },
         "claudeBlocker.suspendPresets": {
           "type": "array",
-          "items": { "type": "number" },
-          "default": [5, 10, 15, 30],
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            5,
+            10,
+            15,
+            30
+          ],
           "description": "Suspend duration presets (minutes)"
         },
         "claudeBlocker.notifications.sound.enabled": {
@@ -72,7 +132,16 @@
         },
         "claudeBlocker.notifications.sound.onStopWorking.sound": {
           "type": "string",
-          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "enum": [
+            "none",
+            "notification-unctuous",
+            "bright-bell",
+            "marimba-ascending",
+            "dry-bongos",
+            "message-notification",
+            "notification-sound",
+            "custom"
+          ],
           "default": "notification-unctuous",
           "description": "Sound when Claude stops working"
         },
@@ -90,7 +159,16 @@
         },
         "claudeBlocker.notifications.sound.onWaitingForInput.sound": {
           "type": "string",
-          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "enum": [
+            "none",
+            "notification-unctuous",
+            "bright-bell",
+            "marimba-ascending",
+            "dry-bongos",
+            "message-notification",
+            "notification-sound",
+            "custom"
+          ],
           "default": "notification-unctuous",
           "description": "Sound when Claude waits for input"
         },
@@ -108,7 +186,16 @@
         },
         "claudeBlocker.notifications.sound.onPomodoroSwitch.sound": {
           "type": "string",
-          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "enum": [
+            "none",
+            "notification-unctuous",
+            "bright-bell",
+            "marimba-ascending",
+            "dry-bongos",
+            "message-notification",
+            "notification-sound",
+            "custom"
+          ],
           "default": "marimba-ascending",
           "description": "Sound on pomodoro phase change"
         },
@@ -126,7 +213,16 @@
         },
         "claudeBlocker.notifications.sound.onSuspendExpired.sound": {
           "type": "string",
-          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "enum": [
+            "none",
+            "notification-unctuous",
+            "bright-bell",
+            "marimba-ascending",
+            "dry-bongos",
+            "message-notification",
+            "notification-sound",
+            "custom"
+          ],
           "default": "notification-unctuous",
           "description": "Sound when suspend timer expires"
         },
@@ -168,6 +264,7 @@
     "@types/ws": "^8.18.1",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.27.4",
     "eslint": "^9.39.3",
     "typescript": "^5.9.3",

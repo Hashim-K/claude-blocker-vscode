@@ -1,5 +1,6 @@
 .vscode/**
 .vscode-test/**
+.claude/**
 src/**
 node_modules/**
 docs/**
@@ -8,5 +9,7 @@ docs/**
 tsconfig.json
 eslint.config.mjs
 .vscode-test.mjs
+vsc-extension-quickstart.md
+CHANGELOG.md
 !out/**
 !media/**
