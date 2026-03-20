@@ -27,7 +27,7 @@
         {
           "id": "claude-blocker",
           "title": "Claude Blocker",
-          "icon": "$(shield)"
+          "icon": "media/icon.svg"
         }
       ]
     },

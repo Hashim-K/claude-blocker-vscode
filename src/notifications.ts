@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
+import { readdirSync } from "node:fs";
 import { platform } from "node:os";
 
 export type SoundStyle = "none" | "subtle" | "clear" | "alarm";
@@ -71,9 +72,18 @@ export class NotificationManager {
     }
   }
 
+  private findSoundFile(style: string): string | null {
+    const dir = join(this.extensionPath, "media", "sounds");
+    try {
+      const file = readdirSync(dir).find(f => f.startsWith(style + "."));
+      return file ? join(dir, file) : null;
+    } catch { return null; }
+  }
+
   private playSound(style: SoundStyle): void {
     if (!this._soundEnabled || style === "none") return;
-    const soundFile = join(this.extensionPath, "media", "sounds", `${style}.mp3`);
+    const soundFile = this.findSoundFile(style);
+    if (!soundFile) return;
     const volume = this.getVolume();
     try {
       const os = platform();
