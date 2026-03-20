@@ -3,6 +3,8 @@ import type { ServerManager } from "../server.js";
 import type { Blocker } from "../blocker.js";
 import type { Pomodoro } from "../pomodoro.js";
 import type { StatsTracker } from "../stats.js";
+import type { ActivityTracker } from "../activityTracker.js";
+import type { Session } from "../server/types.js";
 import { areHooksConfigured } from "../hooks.js";
 
 function fmtMs(ms: number): string {
@@ -19,7 +21,24 @@ function fmtTime(ms: number): string {
   return `${min}:${String(sec).padStart(2, "0")}`;
 }
 
-function escHtml(s: string): string {
+function fmtDuration(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ${min % 60}m`;
+}
+
+function fmtClockTime(ts: number): string {
+  const d = new Date(ts);
+  let h = d.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${String(d.getMinutes()).padStart(2, "0")} ${ampm}`;
+}
+
+function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
@@ -30,13 +49,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private blocker: Blocker;
   private pomodoro: Pomodoro;
   private stats: StatsTracker;
+  private activity: ActivityTracker;
   private port: number;
 
-  constructor(server: ServerManager, blocker: Blocker, pomodoro: Pomodoro, stats: StatsTracker, port: number) {
+  constructor(server: ServerManager, blocker: Blocker, pomodoro: Pomodoro, stats: StatsTracker, activity: ActivityTracker, port: number) {
     this.server = server;
     this.blocker = blocker;
     this.pomodoro = pomodoro;
     this.stats = stats;
+    this.activity = activity;
     this.port = port;
 
     const refresh = () => this.update();
@@ -62,6 +83,80 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private update(): void {
     if (!this.view) return;
     this.view.webview.html = this.getHtml();
+  }
+
+  private renderSessionCard(session: Session): string {
+    const statusDot = session.status === "working" ? "dot-working"
+      : session.status === "waiting_for_input" ? "dot-waiting" : "dot-idle";
+    const statusLabel = session.status === "working" ? "Working"
+      : session.status === "waiting_for_input" ? "Waiting" : "Idle";
+    const elapsed = fmtDuration(Date.now() - new Date(session.startTime).getTime());
+    const lastTool = session.lastTool ? esc(session.lastTool) : "—";
+
+    return `<div class="session-card">
+      <div class="session-header">
+        <span class="dot ${statusDot}"></span>
+        <span class="session-name">${esc(session.projectName)}</span>
+        <span class="session-elapsed">${elapsed}</span>
+      </div>
+      <div class="session-detail">${statusLabel} · ${session.toolCount} tools · Last: ${lastTool}</div>
+    </div>`;
+  }
+
+  private renderTimeline(): string {
+    const data = this.activity.getTimelineData();
+    if (data.length === 0) {
+      return `<div class="empty-state">No activity recorded yet</div>`;
+    }
+
+    const now = Date.now();
+    const windowMs = 4 * 60 * 60 * 1000;
+    const windowStart = now - windowMs;
+
+    // Time axis labels (5 evenly spaced)
+    const labels: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const t = windowStart + (windowMs * i / 4);
+      labels.push(fmtClockTime(t));
+    }
+
+    let timeAxisHtml = `<div class="time-axis">`;
+    for (const label of labels) {
+      timeAxisHtml += `<span>${label}</span>`;
+    }
+    timeAxisHtml += `</div>`;
+
+    let rowsHtml = "";
+    for (const session of data) {
+      let segmentsHtml = "";
+      for (const seg of session.segments) {
+        const startPct = Math.max(0, (seg.start - windowStart) / windowMs * 100);
+        const endPct = Math.min(100, (seg.end - windowStart) / windowMs * 100);
+        const widthPct = endPct - startPct;
+        if (widthPct <= 0) continue;
+        const segClass = seg.status === "working" ? "seg-working"
+          : seg.status === "waiting_for_input" ? "seg-waiting" : "seg-idle";
+        segmentsHtml += `<div class="seg ${segClass}" style="left:${startPct}%;width:${widthPct}%"></div>`;
+      }
+
+      const lastSeg = session.segments[session.segments.length - 1];
+      const elapsed = fmtDuration(now - (lastSeg?.start ?? now));
+
+      // Truncate long names
+      const name = session.projectName.length > 10
+        ? session.projectName.substring(0, 9) + "…"
+        : session.projectName;
+
+      rowsHtml += `<div class="timeline-row">
+        <div class="timeline-label">
+          <span class="tl-name">${esc(name)}</span>
+          <span class="tl-elapsed">${elapsed}</span>
+        </div>
+        <div class="timeline-bar">${segmentsHtml}</div>
+      </div>`;
+    }
+
+    return timeAxisHtml + rowsHtml;
   }
 
   private getHtml(): string {
@@ -94,7 +189,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       statusIcon = "🛡"; statusText = "Blocking"; statusClass = "blocking";
     }
 
-    // Buttons
+    // Controls
     const serverBtn = s.state !== "running"
       ? `<button class="btn" onclick="cmd('claude-blocker.startServer')">▶ Start Server</button>`
       : `<button class="btn btn-muted" onclick="cmd('claude-blocker.stopServer')">■ Stop Server</button>`;
@@ -105,9 +200,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     const suspendBtn = `<button class="btn" onclick="cmd('claude-blocker.suspend')">⏱ Suspend...</button>`;
 
+    const pomCfg = vscode.workspace.getConfiguration("claudeBlocker");
+    const pomActiveMin = pomCfg.get<number>("pomodoro.activeMinutes", 25);
+    const pomBreakMin = pomCfg.get<number>("pomodoro.breakMinutes", 5);
+
     const pomBtn = pState.running
       ? `<button class="btn btn-muted" onclick="cmd('claude-blocker.stopPomodoro')">■ Stop Pomodoro</button>`
       : `<button class="btn" onclick="cmd('claude-blocker.startPomodoro')">🍅 Start Pomodoro</button>`;
+
+    // Active sessions
+    const realSessions = s.state === "running"
+      ? s.sessions.filter(sess => sess.id !== "vscode-pause")
+      : [];
+    let sessionsHtml: string;
+    if (s.state !== "running") {
+      sessionsHtml = `<div class="empty-state">Server not running</div>`;
+    } else if (realSessions.length === 0) {
+      sessionsHtml = `<div class="empty-state">No active sessions</div>`;
+    } else {
+      sessionsHtml = realSessions.map(sess => this.renderSessionCard(sess)).join("");
+    }
+
+    // Timeline
+    const timelineHtml = s.state === "running" ? this.renderTimeline() : `<div class="empty-state">Server not running</div>`;
 
     // Hook status
     let hookHtml: string;
@@ -133,6 +248,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     padding: 12px;
   }
 
+  /* Status banner */
   .status-banner {
     text-align: center;
     padding: 14px 10px;
@@ -150,13 +266,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   .status-banner.break { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.15)); }
   .status-banner.error { background: var(--vscode-inputValidation-errorBackground, rgba(255,80,80,0.15)); }
 
-  .session-info {
-    text-align: center;
-    margin-bottom: 14px;
-    opacity: 0.8;
-    font-size: 0.9em;
-  }
-
+  /* Section labels */
   .section-label {
     font-size: 0.75em;
     text-transform: uppercase;
@@ -165,9 +275,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     margin-bottom: 6px;
     margin-top: 16px;
   }
-  .section-label:first-of-type { margin-top: 0; }
 
-  .btn-group { display: flex; flex-direction: column; gap: 4px; }
+  /* Controls */
+  .btn-row { display: flex; gap: 4px; margin-bottom: 4px; }
+  .btn-row .btn { flex: 1; text-align: center; }
   .btn {
     display: block;
     width: 100%;
@@ -186,6 +297,134 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   .btn-success:hover { background: var(--vscode-button-hoverBackground); }
   .btn-muted { opacity: 0.7; }
 
+  /* Pomodoro config */
+  .pom-config {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .pom-field {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--vscode-editor-background);
+    border-radius: 4px;
+    padding: 5px 8px;
+    cursor: pointer;
+    font-size: 0.85em;
+  }
+  .pom-field:hover { opacity: 0.8; }
+  .pom-value { font-weight: 600; }
+  .pom-unit { opacity: 0.6; font-size: 0.85em; }
+
+  /* Active Sessions */
+  .session-card {
+    background: var(--vscode-editor-background);
+    border-radius: 5px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+  }
+  .session-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-working { background: #4ec958; }
+  .dot-waiting { background: #e8a838; }
+  .dot-idle { background: #888; }
+  .session-name {
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-elapsed {
+    font-size: 0.85em;
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+  .session-detail {
+    font-size: 0.8em;
+    opacity: 0.6;
+    margin-top: 3px;
+    margin-left: 14px;
+  }
+
+  .empty-state {
+    background: var(--vscode-editor-background);
+    border-radius: 5px;
+    padding: 16px;
+    text-align: center;
+    opacity: 0.5;
+    font-size: 0.9em;
+  }
+
+  /* Activity Timeline */
+  .timeline-legend {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    font-size: 0.75em;
+    opacity: 0.7;
+    margin-bottom: 6px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .time-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7em;
+    opacity: 0.4;
+    margin-bottom: 6px;
+    padding: 0 2px;
+  }
+  .timeline-row {
+    margin-bottom: 6px;
+  }
+  .timeline-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+  }
+  .tl-name {
+    font-size: 0.85em;
+    font-family: var(--vscode-editor-font-family, monospace);
+    opacity: 0.8;
+  }
+  .tl-elapsed {
+    font-size: 0.75em;
+    opacity: 0.5;
+  }
+  .timeline-bar {
+    position: relative;
+    height: 6px;
+    background: var(--vscode-editor-background);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .seg {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    border-radius: 3px;
+  }
+  .seg-working { background: #4ec958; }
+  .seg-waiting { background: #e8a838; }
+  .seg-idle { background: #555; }
+
+  /* Stats */
   .stats-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -200,6 +439,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   .stat-value { font-size: 1.15em; font-weight: 600; }
   .stat-label { font-size: 0.75em; opacity: 0.6; margin-top: 2px; }
 
+  /* Tags */
   .tag {
     display: inline-block;
     padding: 3px 8px;
@@ -221,34 +461,58 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 </style>
 </head>
 <body>
-  <div class="status-banner ${escHtml(statusClass)}">
-    <span class="icon">${statusIcon}</span>${escHtml(statusText)}
+  <div class="status-banner ${esc(statusClass)}">
+    <span class="icon">${statusIcon}</span>${esc(statusText)}
   </div>
-
-  ${s.state === "running" ? `
-  <div class="session-info">
-    ${s.sessions.length} session${s.sessions.length !== 1 ? "s" : ""} · ${s.working} working · ${s.waitingForInput} waiting
-  </div>` : (s.error ? `<div class="session-info">${escHtml(s.error)}</div>` : "")}
 
   <div class="section-label">Controls</div>
-  <div class="btn-group">
+  <div class="btn-row">
     ${serverBtn}
     ${pauseBtn}
-    ${suspendBtn}
-    ${pomBtn}
   </div>
+  <div class="btn-row">
+    ${suspendBtn}
+  </div>
+
+  <div class="section-label">Pomodoro</div>
+  <div class="pom-config">
+    <div class="pom-field" onclick="cmd('claude-blocker.setPomodoroActive')">
+      <span>🟢</span>
+      <span class="pom-value">${pomActiveMin}</span>
+      <span class="pom-unit">min active</span>
+    </div>
+    <div class="pom-field" onclick="cmd('claude-blocker.setPomodoroBreak')">
+      <span>☕</span>
+      <span class="pom-value">${pomBreakMin}</span>
+      <span class="pom-unit">min break</span>
+    </div>
+  </div>
+  ${pomBtn}
+
+  <div class="section-label">Active Sessions</div>
+  ${sessionsHtml}
+
+  <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+    <span>Activity Timeline</span>
+    <span class="timeline-legend">
+      <span class="legend-item"><span class="legend-dot" style="background:#4ec958"></span> Working</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#e8a838"></span> Waiting</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#555"></span> Idle</span>
+    </span>
+  </div>
+  ${timelineHtml}
 
   <div class="section-label">Today</div>
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-value">${escHtml(fmtMs(today.blockingMs))}</div><div class="stat-label">Blocked</div></div>
-    <div class="stat-card"><div class="stat-value">${escHtml(fmtMs(today.unblockedMs))}</div><div class="stat-label">Unblocked</div></div>
+    <div class="stat-card"><div class="stat-value">${esc(fmtMs(today.blockingMs))}</div><div class="stat-label">Blocked</div></div>
+    <div class="stat-card"><div class="stat-value">${esc(fmtMs(today.unblockedMs))}</div><div class="stat-label">Unblocked</div></div>
     <div class="stat-card"><div class="stat-value">${today.sessionCount}</div><div class="stat-label">Sessions</div></div>
     <div class="stat-card"><div class="stat-value">${today.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
   </div>
 
   <div class="section-label">All Time</div>
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-value">${escHtml(fmtMs(all.blockingMs))}</div><div class="stat-label">Blocked</div></div>
+    <div class="stat-card"><div class="stat-value">${esc(fmtMs(all.blockingMs))}</div><div class="stat-label">Blocked</div></div>
     <div class="stat-card"><div class="stat-value">${all.sessionCount}</div><div class="stat-label">Sessions</div></div>
     <div class="stat-card"><div class="stat-value">${all.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
     <div class="stat-card"><div class="stat-value">${all.days}</div><div class="stat-label">Days</div></div>
@@ -256,6 +520,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   <div class="section-label">Setup</div>
   ${hookHtml}
+  <div class="btn-row" style="margin-top:6px">
+    <button class="btn" onclick="cmd('claude-blocker.openSettings')">⚙ Settings</button>
+    <button class="btn" onclick="cmd('claude-blocker.testSound')">🔊 Test Sound</button>
+  </div>
   <div class="footer">Port ${this.port}</div>
 
   <script>

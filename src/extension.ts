@@ -6,6 +6,7 @@ import { NotificationManager } from "./notifications.js";
 import { StatsTracker } from "./stats.js";
 import { StatusBar } from "./ui/statusBar.js";
 import { SidebarProvider } from "./ui/sidebarProvider.js";
+import { ActivityTracker } from "./activityTracker.js";
 import { areHooksConfigured, setupHooks, removeHooks } from "./hooks.js";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -20,9 +21,10 @@ export function activate(context: vscode.ExtensionContext) {
   const pomodoro = new Pomodoro(blocker, activeMin, breakMin);
   const notifications = new NotificationManager(context.extensionPath);
   const stats = new StatsTracker(context.globalState, server);
+  const activity = new ActivityTracker(server);
   const statusBar = new StatusBar(server, blocker, pomodoro);
 
-  const sidebarProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
+  const sidebarProvider = new SidebarProvider(server, blocker, pomodoro, stats, activity, port);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("claude-blocker.panel", sidebarProvider),
   );
@@ -87,6 +89,28 @@ export function activate(context: vscode.ExtensionContext) {
         `All time: ${fmt(all.blockingMs)} blocked, ${all.sessionCount} sessions over ${all.days} days`
       );
     }],
+    ["claude-blocker.openSettings", () => {
+      vscode.commands.executeCommand("workbench.action.openSettings", "claudeBlocker");
+    }],
+    ["claude-blocker.testSound", async () => {
+      const sounds = ["notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound"];
+      const picked = await vscode.window.showQuickPick(sounds, { placeHolder: "Pick a sound to test" });
+      if (picked) notifications.testSound(picked);
+    }],
+    ["claude-blocker.setPomodoroActive", async () => {
+      const input = await vscode.window.showInputBox({ prompt: "Active phase (minutes)", value: String(config.get<number>("pomodoro.activeMinutes", 25)), validateInput: v => isNaN(Number(v)) || Number(v) <= 0 ? "Enter a positive number" : null });
+      if (!input) return;
+      await config.update("pomodoro.activeMinutes", Number(input), true);
+      pomodoro.updateSettings(Number(input), config.get<number>("pomodoro.breakMinutes", 5));
+      refreshAll();
+    }],
+    ["claude-blocker.setPomodoroBreak", async () => {
+      const input = await vscode.window.showInputBox({ prompt: "Break phase (minutes)", value: String(config.get<number>("pomodoro.breakMinutes", 5)), validateInput: v => isNaN(Number(v)) || Number(v) <= 0 ? "Enter a positive number" : null });
+      if (!input) return;
+      await config.update("pomodoro.breakMinutes", Number(input), true);
+      pomodoro.updateSettings(config.get<number>("pomodoro.activeMinutes", 25), Number(input));
+      refreshAll();
+    }],
     ["claude-blocker.setupHooks", () => { setupHooks(port); vscode.window.showInformationMessage("Claude Blocker hooks installed"); refreshAll(); }],
     ["claude-blocker.removeHooks", () => { removeHooks(); vscode.window.showInformationMessage("Claude Blocker hooks removed"); refreshAll(); }],
     ["claude-blocker.quickPick", async () => {
@@ -142,6 +166,7 @@ export function activate(context: vscode.ExtensionContext) {
     stats.dispose();
     notifications.dispose();
     sidebarProvider.dispose();
+    activity.dispose();
     server.dispose();
   }});
 }

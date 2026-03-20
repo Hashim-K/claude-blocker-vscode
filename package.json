@@ -70,36 +70,77 @@
           "default": true,
           "description": "Enable sound notifications"
         },
-        "claudeBlocker.notifications.sound.volume": {
+        "claudeBlocker.notifications.sound.onStopWorking.sound": {
+          "type": "string",
+          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "default": "notification-unctuous",
+          "description": "Sound when Claude stops working"
+        },
+        "claudeBlocker.notifications.sound.onStopWorking.volume": {
           "type": "number",
           "default": 70,
           "minimum": 0,
           "maximum": 100,
-          "description": "Sound volume (0-100)"
+          "description": "Volume for stop-working sound (0-100)"
         },
-        "claudeBlocker.notifications.sound.onStopWorking": {
+        "claudeBlocker.notifications.sound.onStopWorking.customPath": {
           "type": "string",
-          "enum": ["none", "subtle", "clear", "alarm"],
-          "default": "subtle",
-          "description": "Sound when Claude stops working"
+          "default": "",
+          "description": "Path to custom sound file (used when sound is 'custom')"
         },
-        "claudeBlocker.notifications.sound.onWaitingForInput": {
+        "claudeBlocker.notifications.sound.onWaitingForInput.sound": {
           "type": "string",
-          "enum": ["none", "subtle", "clear", "alarm"],
-          "default": "subtle",
+          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "default": "notification-unctuous",
           "description": "Sound when Claude waits for input"
         },
-        "claudeBlocker.notifications.sound.onPomodoroSwitch": {
+        "claudeBlocker.notifications.sound.onWaitingForInput.volume": {
+          "type": "number",
+          "default": 70,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Volume for waiting-for-input sound (0-100)"
+        },
+        "claudeBlocker.notifications.sound.onWaitingForInput.customPath": {
           "type": "string",
-          "enum": ["none", "subtle", "clear", "alarm"],
-          "default": "alarm",
+          "default": "",
+          "description": "Path to custom sound file (used when sound is 'custom')"
+        },
+        "claudeBlocker.notifications.sound.onPomodoroSwitch.sound": {
+          "type": "string",
+          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "default": "marimba-ascending",
           "description": "Sound on pomodoro phase change"
         },
-        "claudeBlocker.notifications.sound.onSuspendExpired": {
+        "claudeBlocker.notifications.sound.onPomodoroSwitch.volume": {
+          "type": "number",
+          "default": 70,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Volume for pomodoro-switch sound (0-100)"
+        },
+        "claudeBlocker.notifications.sound.onPomodoroSwitch.customPath": {
           "type": "string",
-          "enum": ["none", "subtle", "clear", "alarm"],
-          "default": "subtle",
+          "default": "",
+          "description": "Path to custom sound file (used when sound is 'custom')"
+        },
+        "claudeBlocker.notifications.sound.onSuspendExpired.sound": {
+          "type": "string",
+          "enum": ["none", "notification-unctuous", "bright-bell", "marimba-ascending", "dry-bongos", "message-notification", "notification-sound", "custom"],
+          "default": "notification-unctuous",
           "description": "Sound when suspend timer expires"
+        },
+        "claudeBlocker.notifications.sound.onSuspendExpired.volume": {
+          "type": "number",
+          "default": 70,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Volume for suspend-expired sound (0-100)"
+        },
+        "claudeBlocker.notifications.sound.onSuspendExpired.customPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to custom sound file (used when sound is 'custom')"
         },
         "claudeBlocker.notifications.toast.enabled": {
           "type": "boolean",

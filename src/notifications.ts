@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { readdirSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import { platform } from "node:os";
 
-export type SoundStyle = "none" | "subtle" | "clear" | "alarm";
+export type SoundStyle = "none" | "custom" | "notification-unctuous" | "bright-bell" | "marimba-ascending" | "dry-bongos" | "message-notification" | "notification-sound";
 
 export class NotificationManager {
   private extensionPath: string;
@@ -22,20 +22,22 @@ export class NotificationManager {
     vscode.workspace.getConfiguration("claudeBlocker.notifications.sound").update("enabled", this._soundEnabled, true);
   }
 
-  private getSoundSetting(key: string): SoundStyle {
-    return vscode.workspace.getConfiguration("claudeBlocker.notifications.sound").get(key, "none") as SoundStyle;
+  private getSoundConfig(key: string): { sound: SoundStyle; volume: number; customPath?: string } {
+    const cfg = vscode.workspace.getConfiguration(`claudeBlocker.notifications.sound.${key}`);
+    return {
+      sound: cfg.get<string>("sound", "none") as SoundStyle,
+      volume: cfg.get<number>("volume", 70),
+      customPath: cfg.get<string>("customPath", ""),
+    };
   }
 
   private getToastEnabled(): boolean {
     return vscode.workspace.getConfiguration("claudeBlocker.notifications.toast").get("enabled", true);
   }
 
-  private getVolume(): number {
-    return vscode.workspace.getConfiguration("claudeBlocker.notifications.sound").get("volume", 70);
-  }
-
   async onStopWorking(): Promise<void> {
-    this.playSound(this.getSoundSetting("onStopWorking"));
+    const cfg = this.getSoundConfig("onStopWorking");
+    this.playSoundFromConfig(cfg);
     if (this.getToastEnabled()) {
       vscode.window.showInformationMessage("Claude finished — sites are now blocked", "Pause for 5 min").then(action => {
         if (action === "Pause for 5 min") vscode.commands.executeCommand("claude-blocker.suspend");
@@ -44,21 +46,24 @@ export class NotificationManager {
   }
 
   async onWaitingForInput(): Promise<void> {
-    this.playSound(this.getSoundSetting("onWaitingForInput"));
+    const cfg = this.getSoundConfig("onWaitingForInput");
+    this.playSoundFromConfig(cfg);
     if (this.getToastEnabled()) {
       vscode.window.showInformationMessage("Claude is waiting for your input");
     }
   }
 
   async onPomodoroSwitch(phase: "active" | "break"): Promise<void> {
-    this.playSound(this.getSoundSetting("onPomodoroSwitch"));
+    const cfg = this.getSoundConfig("onPomodoroSwitch");
+    this.playSoundFromConfig(cfg);
     if (this.getToastEnabled()) {
       vscode.window.showInformationMessage(phase === "break" ? "Pomodoro break — take a rest!" : "Break over — back to work!");
     }
   }
 
   async onSuspendExpired(): Promise<void> {
-    this.playSound(this.getSoundSetting("onSuspendExpired"));
+    const cfg = this.getSoundConfig("onSuspendExpired");
+    this.playSoundFromConfig(cfg);
     if (this.getToastEnabled()) {
       vscode.window.showInformationMessage("Suspend expired — sites are now blocked");
     }
@@ -72,19 +77,40 @@ export class NotificationManager {
     }
   }
 
-  private findSoundFile(style: string): string | null {
+  testSound(name: string, volume = 70): void {
+    if (name === "custom") return;
+    const soundFile = this.findBundledSound(name);
+    if (!soundFile) {
+      vscode.window.showWarningMessage(`Sound file "${name}" not found`);
+      return;
+    }
+    this.playFile(soundFile, volume);
+  }
+
+  private playSoundFromConfig(cfg: { sound: SoundStyle; volume: number; customPath?: string }): void {
+    if (!this._soundEnabled || cfg.sound === "none") return;
+
+    let file: string | null;
+    if (cfg.sound === "custom") {
+      file = cfg.customPath && existsSync(cfg.customPath) ? cfg.customPath : null;
+      if (!file) return;
+    } else {
+      file = this.findBundledSound(cfg.sound);
+      if (!file) return;
+    }
+
+    this.playFile(file, cfg.volume);
+  }
+
+  private findBundledSound(name: string): string | null {
     const dir = join(this.extensionPath, "media", "sounds");
     try {
-      const file = readdirSync(dir).find(f => f.startsWith(style + "."));
+      const file = readdirSync(dir).find(f => f.startsWith(name + "."));
       return file ? join(dir, file) : null;
     } catch { return null; }
   }
 
-  private playSound(style: SoundStyle): void {
-    if (!this._soundEnabled || style === "none") return;
-    const soundFile = this.findSoundFile(style);
-    if (!soundFile) return;
-    const volume = this.getVolume();
+  private playFile(soundFile: string, volume: number): void {
     try {
       const os = platform();
       if (os === "darwin") {
