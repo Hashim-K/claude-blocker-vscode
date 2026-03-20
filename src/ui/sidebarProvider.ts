@@ -92,7 +92,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       : session.status === "waiting_for_input" ? "Waiting" : "Idle";
     const elapsed = fmtDuration(Date.now() - new Date(session.startTime).getTime());
     const lastTool = session.lastTool ? esc(session.lastTool) : "—";
-
     return `<div class="session-card">
       <div class="session-header">
         <span class="dot ${statusDot}"></span>
@@ -139,24 +138,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         segmentsHtml += `<div class="seg ${segClass}" style="left:${startPct}%;width:${widthPct}%"></div>`;
       }
 
+      const firstSeg = session.segments[0];
       const lastSeg = session.segments[session.segments.length - 1];
-      const elapsed = fmtDuration(now - (lastSeg?.start ?? now));
-
-      // Truncate long names
-      const name = session.projectName.length > 10
-        ? session.projectName.substring(0, 9) + "…"
-        : session.projectName;
+      const elapsed = fmtDuration((lastSeg?.end ?? now) - (firstSeg?.start ?? now));
+      const shortId = session.sessionId.substring(0, 7);
 
       rowsHtml += `<div class="timeline-row">
         <div class="timeline-label">
-          <span class="tl-name">${esc(name)}</span>
-          <span class="tl-elapsed">${elapsed}</span>
+          <span class="tl-name">${esc(session.projectName)}</span>
+          <span class="tl-meta"><span class="tl-id">${esc(shortId)}</span> <span class="tl-elapsed">${elapsed}</span></span>
         </div>
         <div class="timeline-bar">${segmentsHtml}</div>
       </div>`;
     }
 
-    return timeAxisHtml + rowsHtml;
+    return `<div class="timeline-container">${timeAxisHtml}${rowsHtml}</div>`;
   }
 
   private getHtml(): string {
@@ -424,48 +420,65 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     border-radius: 50%;
     display: inline-block;
   }
+  .timeline-container {
+    background: rgba(0,0,0,0.15);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
   .time-axis {
     display: flex;
     justify-content: space-between;
-    font-size: 0.7em;
+    font-size: 0.72em;
     opacity: 0.4;
-    margin-bottom: 6px;
+    margin-bottom: 10px;
     padding: 0 2px;
   }
   .timeline-row {
-    margin-bottom: 6px;
+    margin-bottom: 12px;
   }
+  .timeline-row:last-child { margin-bottom: 0; }
   .timeline-label {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 3px;
+    align-items: baseline;
+    margin-bottom: 4px;
   }
   .tl-name {
-    font-size: 0.85em;
+    font-size: 0.88em;
+    font-weight: 600;
+    opacity: 0.9;
+  }
+  .tl-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .tl-id {
+    font-size: 0.75em;
     font-family: var(--vscode-editor-font-family, monospace);
-    opacity: 0.8;
+    opacity: 0.4;
   }
   .tl-elapsed {
-    font-size: 0.75em;
+    font-size: 0.8em;
     opacity: 0.5;
   }
   .timeline-bar {
     position: relative;
-    height: 10px;
-    background: var(--vscode-editor-background);
-    border-radius: 3px;
+    height: 14px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 4px;
     overflow: hidden;
   }
   .seg {
     position: absolute;
     top: 0;
     height: 100%;
-    border-radius: 3px;
+    border-radius: 4px;
   }
   .seg-working { background: #4ec958; }
   .seg-waiting { background: #e8a838; }
-  .seg-idle { background: #555; }
+  .seg-idle { background: rgba(255,255,255,0.08); }
 
   /* Stats */
   .stats-grid {
