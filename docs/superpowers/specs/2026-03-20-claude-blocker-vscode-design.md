@@ -2,7 +2,7 @@
 
 ## Overview
 
-A fully self-contained VS Code extension that runs an embedded blocker server (as a worker thread), providing a complete UI for controlling website blocking, pause/suspend/pomodoro modes, stats tracking, and Claude Code hook management. Compatible with both the [original Chrome extension](https://github.com/T3-Content/claude-blocker) and the [advanced fork](https://github.com/genesiscz/claude-blocker-advanced) — no modifications to either.
+A fully self-contained VS Code extension that runs an embedded blocker server (as a worker thread), providing a complete UI for controlling website blocking, pause/suspend/pomodoro modes, sound/alarm notifications, stats tracking, and Claude Code hook management. Compatible with both the [original Chrome extension](https://github.com/T3-Content/claude-blocker) and the [advanced fork](https://github.com/genesiscz/claude-blocker-advanced) — no modifications to either.
 
 ## Architecture
 
@@ -26,6 +26,10 @@ A fully self-contained VS Code extension that runs an embedded blocker server (a
 │  │ Status   │  │ Sidebar  │  │ Stats     │      │
 │  │ Bar Item │  │ TreeView │  │ Tracker   │      │
 │  └──────────┘  └──────────┘  └───────────┘      │
+│                                                  │
+│  ┌─────────────────────────────────────────────┐ │
+│  │  Notification Manager (toast + sound)       │ │
+│  └─────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────┘
          ▲                    │
     POST /hook            WebSocket
@@ -36,17 +40,15 @@ A fully self-contained VS Code extension that runs an embedded blocker server (a
 
 ### Key Decisions
 
-**Embedded worker thread, not child process or in-process:** The server runs as a Node.js `worker_threads` Worker inside VS Code's own runtime. `process.exit()` in a worker only kills the worker, not the extension host. `worker.terminate()` provides clean shutdown. No external Node.js, npx, or npm packages required. Zero user-facing dependencies.
+**Embedded worker thread, not child process or in-process:** The server runs as a Node.js `worker_threads` Worker inside VS Code's own runtime. `process.exit()` in a worker only kills the worker, not the extension host. `worker.terminate()` provides clean shutdown. No external Node.js, npx, or npm packages required. Zero runtime dependencies — all packages (including `ws`) are bundled at build time.
 
 **Own server implementation:** Rather than importing from either upstream package (which brings ESM/CJS issues, hardcoded ports, `process.exit` handlers, and coupling to one version), we implement our own server that speaks the **superset** of both protocols. This means either Chrome extension works out of the box.
 
-**Protocol compatibility (superset):** Both Chrome extensions connect via the same WebSocket and expect `{ type: "state", blocked, ... }` messages. Our server sends:
-- For the original extension: `sessions` as a count, `working`, `waitingForInput`
-- For the advanced extension: `sessions` as a full `Session[]` array, `working`, `waitingForInput`, plus stats endpoints (`GET /stats`, `GET /history`, etc.)
+**Protocol compatibility (superset):** Both Chrome extensions connect via the same WebSocket and expect `{ type: "state", blocked, ... }` messages. Our server sends `sessions` as a `Session[]` array (which the advanced extension requires). The original extension stores this in its `sessions: number` state field — this causes a cosmetic display issue in the original extension's popup (session count shows as garbled text), but **core blocking functionality is unaffected** since the original extension's blocking logic depends only on the `working` and `waitingForInput` fields, not `sessions`. This is an acceptable tradeoff: the advanced extension (which has richer features) gets full compatibility, while the original extension works correctly for its primary purpose.
 
-Both extensions ignore fields they don't recognize, so a superset response works for both.
+Note: Both Chrome extensions recompute `blocked` locally using `working` and `waitingForInput` — the server-sent `blocked` field is advisory. What matters is that `working` and `waitingForInput` counts are accurate.
 
-**Pause via fake hooks (internal):** Since we own the server, the blocker control module calls the server's state manager directly via `parentPort` messages (no HTTP round-trip needed). But the mechanism is the same: inject/remove a synthetic "working" session.
+**Pause via direct worker messages:** Since we own the server, the blocker control module calls the server's state manager directly via `parentPort` messages (no HTTP round-trip needed). The mechanism injects/removes a synthetic "working" session.
 
 **Custom hook management:** The extension implements its own hook setup with configurable port templating.
 
@@ -56,7 +58,7 @@ Both extensions ignore fields they don't recognize, so a superset response works
 
 | Method | Path | Purpose | Compat |
 | --- | --- | --- | --- |
-| `GET` | `/status` | Health check, returns `{ blocked, sessions[] }` | Both |
+| `GET` | `/status` | Health check, returns `{ blocked, sessions: Session[] }` | Both |
 | `POST` | `/hook` | Receives Claude Code hook payloads | Both |
 | `GET` | `/history` | Session history (ended sessions) | Advanced |
 | `GET` | `/stats` | Daily stats, project breakdown, totals | Advanced |
@@ -71,13 +73,11 @@ Both extensions ignore fields they don't recognize, so a superset response works
 {
   type: "state",
   blocked: boolean,           // true when working === 0
-  sessions: Session[],        // full session objects (advanced needs this)
+  sessions: Session[],        // full session objects (advanced needs array, original ignores shape)
   working: number,            // count of working sessions
   waitingForInput: number,    // count of waiting sessions
 }
 ```
-
-The original Chrome extension reads `sessions` as a number (it uses `.sessions` which evaluates to the array length in its comparisons) or ignores extra fields — both are safe.
 
 **Pong** (response to ping):
 
@@ -89,8 +89,8 @@ The original Chrome extension reads `sessions` as a number (it uses `.sessions` 
 
 ```typescript
 { type: "ping" }
-{ type: "subscribe" }
-{ type: "subscribe_stats" }  // advanced only
+{ type: "subscribe" }         // no-op, acknowledged for protocol compat (auto-subscribed on connect)
+{ type: "subscribe_stats" }   // advanced only, triggers stats_update broadcasts
 ```
 
 ### Hook Payload (POST /hook)
@@ -126,11 +126,12 @@ interface Session {
   status: "idle" | "working" | "waiting_for_input";
   projectName: string;
   cwd?: string;
-  startTime: string;       // ISO string
-  lastActivity: string;    // ISO string
+  startTime: string;                // ISO string
+  lastActivity: string;             // ISO string
   lastTool?: string;
   toolCount: number;
   recentTools: ToolCall[];
+  waitingForInputSince?: string;    // ISO string, for debounce logic
   // Token tracking (populated when available)
   inputTokens: number;
   outputTokens: number;
@@ -142,11 +143,15 @@ interface Session {
 ### State Logic
 
 Session status transitions (same as upstream):
+
 - `SessionStart` → create session, status `"idle"`
-- `UserPromptSubmit` → status `"working"`
-- `PreToolUse` → status `"working"` (or `"waiting_for_input"` if tool is in `USER_INPUT_TOOLS`)
-- `Stop` → status `"idle"`
+- `UserPromptSubmit` → status `"working"`, clear `waitingForInputSince`
+- `PreToolUse` → if tool is in `USER_INPUT_TOOLS`: status `"waiting_for_input"`, record `waitingForInputSince`. Otherwise: if currently `waiting_for_input` and < 500ms since `waitingForInputSince`, keep current status (debounce). Else: status `"working"`.
+- `PostToolUse` → update token/cost metrics if provided (no status change)
+- `Stop` → if currently `waiting_for_input` and < 500ms since `waitingForInputSince`, keep current status (debounce). Else: status `"idle"`, clear `waitingForInputSince`.
 - `SessionEnd` → remove session
+
+The 500ms debounce on `waiting_for_input` prevents UI flicker when Claude asks a question and immediately receives tool results or stops.
 
 Blocking: `blocked = (working === 0)` — broadcast on every state change.
 
@@ -181,10 +186,39 @@ Alternates between active (blocking) and break (unblocked) phases.
 - **Active phase** (default 25 min): Blocking works normally. Real Claude sessions still unblock as usual.
 - **Break phase** (default 5 min): Uses the same synthetic session injection as pause to force unblock.
 - Status bar shows current phase and countdown (e.g., `$(clock) Pomodoro 18:22`).
-- Notification when phase switches.
+- Plays notification sound and shows toast on phase switch.
 - Edge case: if Claude is genuinely working during a break, sites are already unblocked — no conflict. When break ends, the synthetic session is removed and real sessions control blocking normally.
 
-### 4. Stats Tracker
+### 4. Notification Manager
+
+Handles VS Code toast notifications and sound/alarm playback for state change events.
+
+**Notification events (each independently configurable):**
+
+| Event | Default Sound | Default Toast | Description |
+| --- | --- | --- | --- |
+| Claude starts working | off | off | A Claude session began inference |
+| Claude stops working | subtle | on | All sessions idle — blocking resumes |
+| Claude waiting for input | subtle | on | Claude is asking a question |
+| Pomodoro: break starts | alarm | on | Active phase ended, break begins |
+| Pomodoro: break ends | alarm | on | Break ended, active phase resumes |
+| Suspend expired | subtle | on | Timed suspension ended |
+| Server stopped | off | on | Worker thread crashed or was stopped |
+
+**Sound system:**
+
+- Sounds are bundled `.mp3` files shipped with the extension (in `media/sounds/`)
+- Three built-in sound styles: `subtle` (soft chime), `clear` (distinct tone), `alarm` (attention-grabbing)
+- Playback via VS Code's built-in audio capabilities or `child_process` fallback (`afplay` on macOS, `paplay`/`aplay` on Linux, `powershell` on Windows)
+- Volume is configurable (0-100)
+- Sound can be set to `none` per event to disable
+
+**Toast notifications:**
+
+- Uses `vscode.window.showInformationMessage` with optional action buttons (e.g., "Dismiss", "Pause for 5 min")
+- Can be disabled per event
+
+### 5. Stats Tracker
 
 Collects usage statistics via direct communication with the worker thread (no HTTP/WebSocket overhead since they're in the same process).
 
@@ -206,7 +240,7 @@ The worker thread sends state change events to the main thread via `postMessage`
 - Today: blocking time, sessions, pomodoros completed
 - All Time: total blocking hours, total sessions, average session length, longest streak (consecutive days with activity)
 
-### 5. Hook Manager
+### 6. Hook Manager
 
 Manages Claude Code hook configuration in `~/.claude/settings.json`.
 
@@ -214,7 +248,7 @@ Manages Claude Code hook configuration in `~/.claude/settings.json`.
 - If not configured: shows VS Code notification with "Set up now" button
 - Install/remove hooks from sidebar UI or command palette
 - Implements its own hook setup with configurable port — templates the port into the curl command: `curl -s -X POST http://localhost:{port}/hook -H 'Content-Type: application/json' -d "$(cat)" > /dev/null 2>&1 &`
-- Configures hooks for: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `Stop`
+- Configures hooks for: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`
 - If user changes the port setting, prompts to reinstall hooks
 
 ## UI
@@ -246,6 +280,7 @@ Panel in the activity bar with sections:
 
 - **Status** — server state, connected sessions, working/idle/waiting counts
 - **Controls** — pause, resume, suspend, pomodoro start/stop
+- **Notifications** — sound on/off toggle, volume slider (via settings link)
 - **Stats** — today and all-time statistics
 - **Setup** — hook status (installed/not installed/wrong port), install/remove hooks button, port display
 
@@ -265,6 +300,7 @@ All actions registered as commands:
 | Start Pomodoro | `claude-blocker.startPomodoro` |
 | Stop Pomodoro | `claude-blocker.stopPomodoro` |
 | Toggle Pomodoro | `claude-blocker.togglePomodoro` |
+| Toggle Sound | `claude-blocker.toggleSound` |
 | Show Stats | `claude-blocker.showStats` |
 | Setup Hooks | `claude-blocker.setupHooks` |
 | Remove Hooks | `claude-blocker.removeHooks` |
@@ -280,11 +316,18 @@ VS Code settings under `claudeBlocker`:
 | `claudeBlocker.pomodoro.activeMinutes` | number | `25` | Pomodoro active phase (minutes) |
 | `claudeBlocker.pomodoro.breakMinutes` | number | `5` | Pomodoro break phase (minutes) |
 | `claudeBlocker.suspendPresets` | number[] | `[5, 10, 15, 30]` | Suspend duration presets (minutes) |
+| `claudeBlocker.notifications.sound.enabled` | boolean | `true` | Enable sound notifications |
+| `claudeBlocker.notifications.sound.volume` | number | `70` | Sound volume (0-100) |
+| `claudeBlocker.notifications.sound.onStopWorking` | string | `"subtle"` | Sound when Claude stops (`none`, `subtle`, `clear`, `alarm`) |
+| `claudeBlocker.notifications.sound.onWaitingForInput` | string | `"subtle"` | Sound when Claude waits for input |
+| `claudeBlocker.notifications.sound.onPomodoroSwitch` | string | `"alarm"` | Sound on pomodoro phase change |
+| `claudeBlocker.notifications.sound.onSuspendExpired` | string | `"subtle"` | Sound when suspend timer expires |
+| `claudeBlocker.notifications.toast.enabled` | boolean | `true` | Enable toast notifications |
 
 ## Extension Lifecycle
 
 - **Activation event**: `onStartupFinished` — activates after VS Code is ready since the extension runs a background server
-- **On activate**: spawn worker thread server (if autoStart), check hooks, initialize stats tracker, create UI elements
+- **On activate**: spawn worker thread server (if autoStart), check hooks, initialize stats tracker and notification manager, create UI elements
 - **On deactivate**: terminate worker thread, clear all timers (pomodoro, suspend, keepalive, stats), save stats
 
 ## Bundling
@@ -294,9 +337,11 @@ Use **esbuild** to produce two bundles:
 1. `out/extension.js` — the main extension entry point (CommonJS, for VS Code)
 2. `out/server-worker.js` — the embedded server (runs in worker thread)
 
-Both bundles are self-contained with all dependencies inlined. The only runtime dependency is the `ws` npm package (WebSocket server), which is bundled into `server-worker.js`. No external packages need to be installed at runtime.
+Both bundles are self-contained with all dependencies inlined. The `ws` npm package (WebSocket server) is bundled into `server-worker.js`. No external packages need to be installed at runtime.
 
-The extension package (`.vsix`) contains both bundles. Users install the extension and everything works — no Node.js on PATH, no npx, no npm.
+Sound files (`.mp3`) are included in the `.vsix` package under `media/sounds/`.
+
+The extension package (`.vsix`) contains both bundles plus media assets. Users install the extension and everything works — no Node.js on PATH, no npx, no npm.
 
 ## File Structure
 
@@ -309,9 +354,15 @@ src/
     types.ts                — shared types (HookPayload, Session, ServerMessage, etc.)
   blocker.ts                — pause/resume/suspend control via worker messages
   pomodoro.ts               — pomodoro timer logic
+  notifications.ts          — sound playback and toast notification manager
   stats.ts                  — stats collection and storage
   hooks.ts                  — hook management (custom implementation with port templating)
   ui/
     statusBar.ts            — status bar item and quick pick menu
     sidebarProvider.ts      — tree view data provider for sidebar panel
+media/
+  sounds/
+    subtle.mp3              — soft chime
+    clear.mp3               — distinct tone
+    alarm.mp3               — attention-grabbing alert
 ```
