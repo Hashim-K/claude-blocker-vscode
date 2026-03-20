@@ -2,66 +2,176 @@
 
 ## Overview
 
-A VS Code extension that runs the [claude-blocker](https://github.com/T3-Content/claude-blocker) server as a managed child process, providing a complete UI for controlling website blocking, pause/suspend/pomodoro modes, stats tracking, and Claude Code hook management. The existing Chrome extension connects to it unmodified.
+A fully self-contained VS Code extension that runs an embedded blocker server (as a worker thread), providing a complete UI for controlling website blocking, pause/suspend/pomodoro modes, stats tracking, and Claude Code hook management. Compatible with both the [original Chrome extension](https://github.com/T3-Content/claude-blocker) and the [advanced fork](https://github.com/genesiscz/claude-blocker-advanced) — no modifications to either.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────┐
-│  VS Code Extension                          │
-│                                             │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐ │
-│  │ Server   │  │ Blocker  │  │ Pomodoro  │ │
-│  │ Manager  │  │ Control  │  │ Timer     │ │
-│  └────┬─────┘  └────┬─────┘  └─────┬─────┘ │
-│       │              │              │       │
-│       │         POST /hook     uses control │
-│       │              │              │       │
-│  ┌────▼──────────────▼──────────────▼─────┐ │
-│  │  claude-blocker server (child process) │ │
-│  │  HTTP :8765 + WebSocket /ws            │ │
-│  └────────────────────────────────────────┘ │
-│                                             │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐ │
-│  │ Status   │  │ Sidebar  │  │ Stats     │ │
-│  │ Bar Item │  │ TreeView │  │ Tracker   │ │
-│  └──────────┘  └──────────┘  └───────────┘ │
-└─────────────────────────────────────────────┘
+```text
+┌──────────────────────────────────────────────────┐
+│  VS Code Extension (single install, zero deps)   │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐      │
+│  │ Server   │  │ Blocker  │  │ Pomodoro  │      │
+│  │ Manager  │  │ Control  │  │ Timer     │      │
+│  └────┬─────┘  └────┬─────┘  └─────┬─────┘      │
+│       │              │              │            │
+│  ┌────▼──────────────▼──────────────▼──────────┐ │
+│  │  Embedded server (Worker Thread)            │ │
+│  │  HTTP :8765 + WebSocket /ws                 │ │
+│  │  Own implementation of claude-blocker       │ │
+│  │  protocol (superset of both versions)       │ │
+│  └─────────────────────────────────────────────┘ │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐      │
+│  │ Status   │  │ Sidebar  │  │ Stats     │      │
+│  │ Bar Item │  │ TreeView │  │ Tracker   │      │
+│  └──────────┘  └──────────┘  └───────────┘      │
+└──────────────────────────────────────────────────┘
          ▲                    │
     POST /hook            WebSocket
          │                    ▼
-   Claude Code          Chrome Extension
-   (via hooks)          (unmodified)
+   Claude Code       Chrome Extension
+   (via hooks)       (original OR advanced)
 ```
 
 ### Key Decisions
 
-**Child process, not in-process:** The upstream `startServer()` returns `void` (no shutdown handle) and installs a `process.exit(0)` SIGINT handler — embedding it in the VS Code extension host process is unsafe. Running as a child process via `npx claude-blocker --port N` gives clean start/stop via process signals, avoids ESM/CJS conflicts, and isolates the server completely.
+**Embedded worker thread, not child process or in-process:** The server runs as a Node.js `worker_threads` Worker inside VS Code's own runtime. `process.exit()` in a worker only kills the worker, not the extension host. `worker.terminate()` provides clean shutdown. No external Node.js, npx, or npm packages required. Zero user-facing dependencies.
 
-**No modifications to upstream:** Pause/suspend/pomodoro are implemented by sending fake HTTP hook events to the local server with a synthetic session ID (`"vscode-pause"`), making the server report a "working" session so the Chrome extension unblocks. This avoids any changes to the claude-blocker server or Chrome extension.
+**Own server implementation:** Rather than importing from either upstream package (which brings ESM/CJS issues, hardcoded ports, `process.exit` handlers, and coupling to one version), we implement our own server that speaks the **superset** of both protocols. This means either Chrome extension works out of the box.
 
-**Custom hook management:** The upstream `setupHooks()` hardcodes the default port (8765) into the curl commands. The extension implements its own hook setup that templates the configured port, so non-default ports work correctly.
+**Protocol compatibility (superset):** Both Chrome extensions connect via the same WebSocket and expect `{ type: "state", blocked, ... }` messages. Our server sends:
+- For the original extension: `sessions` as a count, `working`, `waitingForInput`
+- For the advanced extension: `sessions` as a full `Session[]` array, `working`, `waitingForInput`, plus stats endpoints (`GET /stats`, `GET /history`, etc.)
+
+Both extensions ignore fields they don't recognize, so a superset response works for both.
+
+**Pause via fake hooks (internal):** Since we own the server, the blocker control module calls the server's state manager directly via `parentPort` messages (no HTTP round-trip needed). But the mechanism is the same: inject/remove a synthetic "working" session.
+
+**Custom hook management:** The extension implements its own hook setup with configurable port templating.
+
+## Server Protocol
+
+### Endpoints (HTTP)
+
+| Method | Path | Purpose | Compat |
+| --- | --- | --- | --- |
+| `GET` | `/status` | Health check, returns `{ blocked, sessions[] }` | Both |
+| `POST` | `/hook` | Receives Claude Code hook payloads | Both |
+| `GET` | `/history` | Session history (ended sessions) | Advanced |
+| `GET` | `/stats` | Daily stats, project breakdown, totals | Advanced |
+| `GET` | `/stats/:date` | Stats for a specific date | Advanced |
+| `GET` | `/stats/range?dates=...` | Stats for date range | Advanced |
+
+### WebSocket Messages (server → client)
+
+**State broadcast** (sent on every state change):
+
+```typescript
+{
+  type: "state",
+  blocked: boolean,           // true when working === 0
+  sessions: Session[],        // full session objects (advanced needs this)
+  working: number,            // count of working sessions
+  waitingForInput: number,    // count of waiting sessions
+}
+```
+
+The original Chrome extension reads `sessions` as a number (it uses `.sessions` which evaluates to the array length in its comparisons) or ignores extra fields — both are safe.
+
+**Pong** (response to ping):
+
+```typescript
+{ type: "pong" }
+```
+
+### WebSocket Messages (client → server)
+
+```typescript
+{ type: "ping" }
+{ type: "subscribe" }
+{ type: "subscribe_stats" }  // advanced only
+```
+
+### Hook Payload (POST /hook)
+
+```typescript
+interface HookPayload {
+  session_id: string;
+  hook_event_name:
+    | "UserPromptSubmit" | "PreToolUse" | "PostToolUse"
+    | "Stop" | "SessionStart" | "SessionEnd"
+    | "SubagentStart" | "SubagentStop";
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  cwd?: string;
+  transcript_path?: string;
+  // Advanced fields (token/cost tracking)
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cost_usd?: number;
+  // Subagent fields
+  agent_id?: string;
+  agent_type?: string;
+  agent_transcript_path?: string;
+}
+```
+
+### Session Object
+
+```typescript
+interface Session {
+  id: string;
+  status: "idle" | "working" | "waiting_for_input";
+  projectName: string;
+  cwd?: string;
+  startTime: string;       // ISO string
+  lastActivity: string;    // ISO string
+  lastTool?: string;
+  toolCount: number;
+  recentTools: ToolCall[];
+  // Token tracking (populated when available)
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+```
+
+### State Logic
+
+Session status transitions (same as upstream):
+- `SessionStart` → create session, status `"idle"`
+- `UserPromptSubmit` → status `"working"`
+- `PreToolUse` → status `"working"` (or `"waiting_for_input"` if tool is in `USER_INPUT_TOOLS`)
+- `Stop` → status `"idle"`
+- `SessionEnd` → remove session
+
+Blocking: `blocked = (working === 0)` — broadcast on every state change.
+
+Stale session cleanup: every 30 seconds, remove sessions with no activity for 5 minutes.
 
 ## Modules
 
 ### 1. Server Manager
 
-Responsible for starting and stopping the claude-blocker server as a child process.
+Manages the embedded worker thread server.
 
-- The extension always installs hooks (if needed) **before** spawning the child process, to prevent the upstream interactive prompt from writing hardcoded-port hooks. The child process stdin is piped with `"n\n"` as a safety measure to skip the upstream setup prompt if it somehow triggers.
-- Spawns `npx claude-blocker --port {port}` as a child process
+- Spawns a `Worker` from `worker_threads` running the bundled server script
+- Communicates with the worker via `parentPort`/`postMessage` for direct state access (pause/resume, stats queries)
 - Starts automatically on extension activation if `claudeBlocker.autoStart` is `true`
 - Detects port conflicts: if port is already in use, shows an error with option to change port
-- Monitors child process health — restarts on unexpected exit
-- Gracefully shuts down on extension deactivation via `SIGTERM`
+- Monitors worker health — restarts on unexpected exit
+- Gracefully shuts down on extension deactivation via `worker.terminate()`
 - Exposes server running state to other modules
 
 ### 2. Blocker Control
 
-Manages pause, suspend, and resume via fake hook events.
+Manages pause, suspend, and resume.
 
-- **Pause**: POSTs a `SessionStart` hook followed by a `UserPromptSubmit` hook, both with session ID `"vscode-pause"`, to `http://localhost:{port}/hook`. The server marks this session as "working", and the Chrome extension sees `working > 0` and unblocks. Resends `UserPromptSubmit` every ~3 minutes to prevent the server's 5-minute session timeout. Retries on POST failure.
-- **Resume**: POSTs a `SessionEnd` hook with the same session ID. This fully removes the fake session from the server's session map (unlike `Stop` which would leave a phantom idle session). Blocking resumes.
+- **Pause**: Sends a message to the worker thread to inject a synthetic session with ID `"vscode-pause"` in `"working"` status. The server broadcasts the updated state, Chrome extension sees `working > 0` and unblocks. The server's stale session cleanup would remove it after 5 minutes, so the worker refreshes `lastActivity` on the synthetic session every ~3 minutes.
+- **Resume**: Sends a message to the worker to remove the synthetic session. Blocking resumes.
 - **Suspend for X minutes**: Same as pause but with a timer. Auto-resumes when the timer expires. Presets: 5, 10, 15, 30 minutes (configurable) plus custom input. Countdown displayed in the status bar.
 
 ### 3. Pomodoro Timer
@@ -69,16 +179,19 @@ Manages pause, suspend, and resume via fake hook events.
 Alternates between active (blocking) and break (unblocked) phases.
 
 - **Active phase** (default 25 min): Blocking works normally. Real Claude sessions still unblock as usual.
-- **Break phase** (default 5 min): Uses the fake hook trick (same as pause) to force unblock.
+- **Break phase** (default 5 min): Uses the same synthetic session injection as pause to force unblock.
 - Status bar shows current phase and countdown (e.g., `$(clock) Pomodoro 18:22`).
 - Notification when phase switches.
-- Edge case: if Claude is genuinely working during a break, sites are already unblocked — no conflict. When break ends, the fake pause session is removed via `SessionEnd` and real sessions control blocking normally.
+- Edge case: if Claude is genuinely working during a break, sites are already unblocked — no conflict. When break ends, the synthetic session is removed and real sessions control blocking normally.
 
 ### 4. Stats Tracker
 
-Collects usage statistics by connecting to the server's WebSocket at `ws://localhost:{port}/ws`. Receives real-time `state` messages containing `{ blocked, sessions, working, waitingForInput }`. Uses `GET /status` as a fallback for session details (e.g., session list with CWDs). A 1-second interval timer computes running time counters based on the last known state.
+Collects usage statistics via direct communication with the worker thread (no HTTP/WebSocket overhead since they're in the same process).
+
+The worker thread sends state change events to the main thread via `postMessage`. A 1-second interval timer in the main thread computes running time counters based on the last known state.
 
 **Data collected (daily aggregates keyed by date string):**
+
 - Blocking time: total time sites were blocked (server running, `working === 0`, not paused)
 - Unblocked time: time spent unblocked
 - Session count: number of Claude Code sessions observed
@@ -89,6 +202,7 @@ Collects usage statistics by connecting to the server's WebSocket at `ws://local
 **Storage:** `ExtensionContext.globalState` — persists across restarts, no external DB.
 
 **Display (sidebar section):**
+
 - Today: blocking time, sessions, pomodoros completed
 - All Time: total blocking hours, total sessions, average session length, longest streak (consecutive days with activity)
 
@@ -99,7 +213,7 @@ Manages Claude Code hook configuration in `~/.claude/settings.json`.
 - On first activation: checks if hooks are configured by reading `~/.claude/settings.json` and looking for claude-blocker curl hooks
 - If not configured: shows VS Code notification with "Set up now" button
 - Install/remove hooks from sidebar UI or command palette
-- Implements its own hook setup (not using upstream `setupHooks()`) to support configurable ports — templates the port into the curl command: `curl -s -X POST http://localhost:{port}/hook -H 'Content-Type: application/json' -d "$(cat)" > /dev/null 2>&1 &`
+- Implements its own hook setup with configurable port — templates the port into the curl command: `curl -s -X POST http://localhost:{port}/hook -H 'Content-Type: application/json' -d "$(cat)" > /dev/null 2>&1 &`
 - Configures hooks for: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `Stop`
 - If user changes the port setting, prompts to reinstall hooks
 
@@ -110,15 +224,17 @@ Manages Claude Code hook configuration in `~/.claude/settings.json`.
 Bottom bar item showing current state. Click opens a quick pick menu.
 
 **States:**
+
 - `$(shield) Blocking` — server running, Claude idle, sites blocked
 - `$(play) Working` — Claude actively working, sites unblocked
-- `$(edit) Waiting` — Claude waiting for user input, sites blocked (upstream server treats `waiting_for_input` sessions as not "working")
+- `$(edit) Waiting` — Claude waiting for user input, sites blocked (server treats `waiting_for_input` sessions as not "working")
 - `$(debug-pause) Paused` — manually paused
 - `$(clock) Paused (4:32)` — suspended with countdown
 - `$(clock) Pomodoro 18:22` — pomodoro active with countdown
 - `$(error) Stopped` — server not running
 
 **Quick pick menu on click:**
+
 - Pause / Resume
 - Suspend for X minutes...
 - Start Pomodoro / Stop Pomodoro
@@ -140,7 +256,7 @@ Error states shown inline: "Failed to start server", "Port 8765 in use", "Hooks 
 All actions registered as commands:
 
 | Command | ID |
-|---|---|
+| --- | --- |
 | Start Server | `claude-blocker.startServer` |
 | Stop Server | `claude-blocker.stopServer` |
 | Pause | `claude-blocker.pause` |
@@ -158,7 +274,7 @@ All actions registered as commands:
 VS Code settings under `claudeBlocker`:
 
 | Setting | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `claudeBlocker.port` | number | `8765` | Server port |
 | `claudeBlocker.autoStart` | boolean | `true` | Start server on activation |
 | `claudeBlocker.pomodoro.activeMinutes` | number | `25` | Pomodoro active phase (minutes) |
@@ -168,26 +284,34 @@ VS Code settings under `claudeBlocker`:
 ## Extension Lifecycle
 
 - **Activation event**: `onStartupFinished` — activates after VS Code is ready since the extension runs a background server
-- **On activate**: start server child process (if autoStart), check hooks, initialize stats tracker, create UI elements
-- **On deactivate**: send SIGTERM to child process, clear all timers (pomodoro, suspend, keepalive, stats polling), save stats
+- **On activate**: spawn worker thread server (if autoStart), check hooks, initialize stats tracker, create UI elements
+- **On deactivate**: terminate worker thread, clear all timers (pomodoro, suspend, keepalive, stats), save stats
 
 ## Bundling
 
-Use **esbuild** to bundle the extension into a single file. The extension itself has no heavy runtime dependencies — it only needs Node.js built-ins (`http`, `child_process`, `fs`, `path`, `os`) and the `vscode` API. The `claude-blocker` server runs as a separate child process, so it does not need to be bundled.
+Use **esbuild** to produce two bundles:
 
-The user must have `npx` available (i.e., Node.js installed). On first activation, if `npx` is not found, show a notification directing the user to install Node.js.
+1. `out/extension.js` — the main extension entry point (CommonJS, for VS Code)
+2. `out/server-worker.js` — the embedded server (runs in worker thread)
+
+Both bundles are self-contained with all dependencies inlined. The only runtime dependency is the `ws` npm package (WebSocket server), which is bundled into `server-worker.js`. No external packages need to be installed at runtime.
+
+The extension package (`.vsix`) contains both bundles. Users install the extension and everything works — no Node.js on PATH, no npx, no npm.
 
 ## File Structure
 
-```
+```text
 src/
-  extension.ts          — activation/deactivation, wires everything together
-  server.ts             — server manager (child process lifecycle)
-  blocker.ts            — pause/resume/suspend control via fake hooks
-  pomodoro.ts           — pomodoro timer logic
-  stats.ts              — stats collection and storage
-  hooks.ts              — hook management (custom implementation with port templating)
+  extension.ts              — activation/deactivation, wires everything together
+  server/
+    worker.ts               — worker thread entry point (creates HTTP + WS server)
+    state.ts                — session state management and broadcast logic
+    types.ts                — shared types (HookPayload, Session, ServerMessage, etc.)
+  blocker.ts                — pause/resume/suspend control via worker messages
+  pomodoro.ts               — pomodoro timer logic
+  stats.ts                  — stats collection and storage
+  hooks.ts                  — hook management (custom implementation with port templating)
   ui/
-    statusBar.ts        — status bar item and quick pick menu
-    sidebarProvider.ts  — tree view data provider for sidebar panel
+    statusBar.ts            — status bar item and quick pick menu
+    sidebarProvider.ts      — tree view data provider for sidebar panel
 ```
