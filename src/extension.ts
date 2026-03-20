@@ -22,27 +22,12 @@ export function activate(context: vscode.ExtensionContext) {
   const stats = new StatsTracker(context.globalState, server);
   const statusBar = new StatusBar(server, blocker, pomodoro);
 
-  // Create separate sidebar providers for each view
-  const statusProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
-  statusProvider.setViewId("claude-blocker.status");
-  const controlsProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
-  controlsProvider.setViewId("claude-blocker.controls");
-  const statsProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
-  statsProvider.setViewId("claude-blocker.stats");
-  const setupProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
-  setupProvider.setViewId("claude-blocker.setup");
+  const sidebarProvider = new SidebarProvider(server, blocker, pomodoro, stats, port);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("claude-blocker.panel", sidebarProvider),
+  );
 
-  vscode.window.registerTreeDataProvider("claude-blocker.status", statusProvider);
-  vscode.window.registerTreeDataProvider("claude-blocker.controls", controlsProvider);
-  vscode.window.registerTreeDataProvider("claude-blocker.stats", statsProvider);
-  vscode.window.registerTreeDataProvider("claude-blocker.setup", setupProvider);
-
-  const refreshAll = () => {
-    statusProvider.refresh();
-    controlsProvider.refresh();
-    statsProvider.refresh();
-    setupProvider.refresh();
-  };
+  const refreshAll = () => sidebarProvider.refresh();
 
   // Notification triggers
   let prevWorking = 0;
@@ -156,10 +141,7 @@ export function activate(context: vscode.ExtensionContext) {
     blocker.dispose();
     stats.dispose();
     notifications.dispose();
-    statusProvider.dispose();
-    controlsProvider.dispose();
-    statsProvider.dispose();
-    setupProvider.dispose();
+    sidebarProvider.dispose();
     server.dispose();
   }});
 }

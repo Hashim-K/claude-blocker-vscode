@@ -5,16 +5,6 @@ import type { Pomodoro } from "../pomodoro.js";
 import type { StatsTracker } from "../stats.js";
 import { areHooksConfigured } from "../hooks.js";
 
-class SidebarItem extends vscode.TreeItem {
-  constructor(
-    label: string,
-    collapsible: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.None,
-    public children: SidebarItem[] = [],
-  ) {
-    super(label, collapsible);
-  }
-}
-
 function fmtMs(ms: number): string {
   const mins = Math.floor(ms / 60000);
   if (mins < 60) return `${mins}m`;
@@ -22,16 +12,25 @@ function fmtMs(ms: number): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
-export class SidebarProvider implements vscode.TreeDataProvider<SidebarItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+function fmtTime(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${String(sec).padStart(2, "0")}`;
+}
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export class SidebarProvider implements vscode.WebviewViewProvider {
+  private view: vscode.WebviewView | null = null;
   private unsubs: (() => void)[] = [];
   private server: ServerManager;
   private blocker: Blocker;
   private pomodoro: Pomodoro;
   private stats: StatsTracker;
   private port: number;
-  private viewId: string | null = null;
 
   constructor(server: ServerManager, blocker: Blocker, pomodoro: Pomodoro, stats: StatsTracker, port: number) {
     this.server = server;
@@ -40,139 +39,234 @@ export class SidebarProvider implements vscode.TreeDataProvider<SidebarItem> {
     this.stats = stats;
     this.port = port;
 
-    const refresh = () => this._onDidChangeTreeData.fire();
+    const refresh = () => this.update();
     this.unsubs.push(server.onStateChange(refresh));
     this.unsubs.push(blocker.onChange(refresh));
     this.unsubs.push(pomodoro.onChange(refresh));
   }
 
-  refresh(): void { this._onDidChangeTreeData.fire(); }
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.view = webviewView;
+    webviewView.webview.options = { enableScripts: true };
 
-  setViewId(id: string): void { this.viewId = id; }
+    webviewView.webview.onDidReceiveMessage((msg: { command: string }) => {
+      vscode.commands.executeCommand(msg.command);
+    });
 
-  getTreeItem(element: SidebarItem): vscode.TreeItem { return element; }
-
-  getChildren(element?: SidebarItem): SidebarItem[] {
-    if (element) return element.children;
-
-    switch (this.viewId) {
-      case "claude-blocker.status": return this.getStatusItems();
-      case "claude-blocker.controls": return this.getControlItems();
-      case "claude-blocker.stats": return this.getStatsItems();
-      case "claude-blocker.setup": return this.getSetupItems();
-      default: return [];
-    }
+    webviewView.onDidDispose(() => { this.view = null; });
+    this.update();
   }
 
-  private getStatusItems(): SidebarItem[] {
+  refresh(): void { this.update(); }
+
+  private update(): void {
+    if (!this.view) return;
+    this.view.webview.html = this.getHtml();
+  }
+
+  private getHtml(): string {
     const s = this.server.status;
-    const items: SidebarItem[] = [];
-
-    if (s.state !== "running") {
-      const item = new SidebarItem(`$(error) Server: ${s.state}`);
-      if (s.error) item.description = s.error;
-      items.push(item);
-    } else {
-      items.push(new SidebarItem(`$(check) Server running on port ${s.port}`));
-      items.push(new SidebarItem(`Sessions: ${s.sessions.length}`));
-      items.push(new SidebarItem(`Working: ${s.working}`));
-      items.push(new SidebarItem(`Waiting: ${s.waitingForInput}`));
-      items.push(new SidebarItem(`Blocked: ${s.blocked ? "Yes" : "No"}`));
-    }
-
     const bState = this.blocker.state;
-    if (bState !== "active") {
-      items.push(new SidebarItem(`$(debug-pause) Blocker: ${bState}`));
-    }
-
     const pState = this.pomodoro.state;
-    if (pState.running) {
-      items.push(new SidebarItem(`$(clock) Pomodoro: ${pState.phase}`));
-    }
-
-    return items;
-  }
-
-  private getControlItems(): SidebarItem[] {
-    const items: SidebarItem[] = [];
-    const isPaused = this.blocker.state !== "active";
-
-    if (this.server.status.state !== "running") {
-      const start = new SidebarItem("$(play) Start Server");
-      start.command = { command: "claude-blocker.startServer", title: "Start" };
-      items.push(start);
-    } else {
-      const stop = new SidebarItem("$(primitive-square) Stop Server");
-      stop.command = { command: "claude-blocker.stopServer", title: "Stop" };
-      items.push(stop);
-    }
-
-    if (isPaused) {
-      const resume = new SidebarItem("$(play) Resume");
-      resume.command = { command: "claude-blocker.resume", title: "Resume" };
-      items.push(resume);
-    } else {
-      const pause = new SidebarItem("$(debug-pause) Pause");
-      pause.command = { command: "claude-blocker.pause", title: "Pause" };
-      items.push(pause);
-    }
-
-    const suspend = new SidebarItem("$(clock) Suspend...");
-    suspend.command = { command: "claude-blocker.suspend", title: "Suspend" };
-    items.push(suspend);
-
-    const pomLabel = this.pomodoro.state.running ? "$(primitive-square) Stop Pomodoro" : "$(clock) Start Pomodoro";
-    const pomCmd = this.pomodoro.state.running ? "claude-blocker.stopPomodoro" : "claude-blocker.startPomodoro";
-    const pom = new SidebarItem(pomLabel);
-    pom.command = { command: pomCmd, title: "Pomodoro" };
-    items.push(pom);
-
-    return items;
-  }
-
-  private getStatsItems(): SidebarItem[] {
     const today = this.stats.getToday();
     const all = this.stats.getAllTime();
-    return [
-      new SidebarItem(`--- Today ---`),
-      new SidebarItem(`Blocking: ${fmtMs(today.blockingMs)}`),
-      new SidebarItem(`Unblocked: ${fmtMs(today.unblockedMs)}`),
-      new SidebarItem(`Sessions: ${today.sessionCount}`),
-      new SidebarItem(`Pomodoros: ${today.pomodoroCount}`),
-      new SidebarItem(`--- All Time ---`),
-      new SidebarItem(`Blocking: ${fmtMs(all.blockingMs)}`),
-      new SidebarItem(`Sessions: ${all.sessionCount}`),
-      new SidebarItem(`Pomodoros: ${all.pomodoroCount}`),
-      new SidebarItem(`Active days: ${all.days}`),
-    ];
-  }
-
-  private getSetupItems(): SidebarItem[] {
     const hookStatus = areHooksConfigured(this.port);
-    const items: SidebarItem[] = [];
 
-    if (hookStatus === "installed") {
-      items.push(new SidebarItem("$(check) Hooks installed"));
-    } else if (hookStatus === "wrong-port") {
-      const item = new SidebarItem("$(warning) Hooks: wrong port");
-      item.command = { command: "claude-blocker.setupHooks", title: "Fix" };
-      items.push(item);
+    // Status badge
+    let statusIcon: string, statusText: string, statusClass: string;
+    if (s.state !== "running") {
+      statusIcon = "○"; statusText = `Server ${s.state}`; statusClass = "error";
+    } else if (pState.running) {
+      const label = pState.phase === "active" ? "Focus" : "Break";
+      statusIcon = pState.phase === "active" ? "◉" : "◎";
+      statusText = `${label} ${fmtTime(pState.remaining)}`;
+      statusClass = pState.phase === "active" ? "active" : "break";
+    } else if (bState === "suspended") {
+      statusIcon = "⏸"; statusText = `Suspended ${fmtTime(this.blocker.suspendRemaining)}`;
+      statusClass = "paused";
+    } else if (bState === "paused") {
+      statusIcon = "⏸"; statusText = "Paused"; statusClass = "paused";
+    } else if (s.working > 0) {
+      statusIcon = "●"; statusText = `Working (${s.working})`; statusClass = "working";
+    } else if (s.waitingForInput > 0) {
+      statusIcon = "✎"; statusText = "Waiting for input"; statusClass = "waiting";
     } else {
-      const item = new SidebarItem("$(x) Hooks not installed");
-      item.command = { command: "claude-blocker.setupHooks", title: "Install" };
-      items.push(item);
+      statusIcon = "🛡"; statusText = "Blocking"; statusClass = "blocking";
     }
 
-    const remove = new SidebarItem("$(trash) Remove Hooks");
-    remove.command = { command: "claude-blocker.removeHooks", title: "Remove" };
-    items.push(remove);
+    // Buttons
+    const serverBtn = s.state !== "running"
+      ? `<button class="btn" onclick="cmd('claude-blocker.startServer')">▶ Start Server</button>`
+      : `<button class="btn btn-muted" onclick="cmd('claude-blocker.stopServer')">■ Stop Server</button>`;
 
-    items.push(new SidebarItem(`Port: ${this.port}`));
-    return items;
+    const pauseBtn = bState !== "active"
+      ? `<button class="btn btn-success" onclick="cmd('claude-blocker.resume')">▶ Resume</button>`
+      : `<button class="btn" onclick="cmd('claude-blocker.pause')">⏸ Pause</button>`;
+
+    const suspendBtn = `<button class="btn" onclick="cmd('claude-blocker.suspend')">⏱ Suspend...</button>`;
+
+    const pomBtn = pState.running
+      ? `<button class="btn btn-muted" onclick="cmd('claude-blocker.stopPomodoro')">■ Stop Pomodoro</button>`
+      : `<button class="btn" onclick="cmd('claude-blocker.startPomodoro')">🍅 Start Pomodoro</button>`;
+
+    // Hook status
+    let hookHtml: string;
+    if (hookStatus === "installed") {
+      hookHtml = `<span class="tag tag-ok">✓ Hooks installed</span>`;
+    } else if (hookStatus === "wrong-port") {
+      hookHtml = `<span class="tag tag-warn clickable" onclick="cmd('claude-blocker.setupHooks')">⚠ Wrong port — click to fix</span>`;
+    } else {
+      hookHtml = `<span class="tag tag-err clickable" onclick="cmd('claude-blocker.setupHooks')">✗ Hooks not installed — click to setup</span>`;
+    }
+
+    return /* html */ `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-foreground);
+    padding: 12px;
+  }
+
+  .status-banner {
+    text-align: center;
+    padding: 14px 10px;
+    border-radius: 6px;
+    margin-bottom: 14px;
+    font-weight: 600;
+    font-size: 1.1em;
+  }
+  .status-banner .icon { font-size: 1.4em; margin-right: 6px; }
+  .status-banner.blocking { background: var(--vscode-inputValidation-errorBackground, rgba(255,80,80,0.15)); }
+  .status-banner.working { background: var(--vscode-inputValidation-infoBackground, rgba(80,160,255,0.15)); }
+  .status-banner.waiting { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.15)); }
+  .status-banner.paused { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.15)); }
+  .status-banner.active { background: var(--vscode-inputValidation-infoBackground, rgba(80,160,255,0.15)); }
+  .status-banner.break { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.15)); }
+  .status-banner.error { background: var(--vscode-inputValidation-errorBackground, rgba(255,80,80,0.15)); }
+
+  .session-info {
+    text-align: center;
+    margin-bottom: 14px;
+    opacity: 0.8;
+    font-size: 0.9em;
+  }
+
+  .section-label {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.6;
+    margin-bottom: 6px;
+    margin-top: 16px;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  .btn-group { display: flex; flex-direction: column; gap: 4px; }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.92em;
+    font-family: inherit;
+    text-align: left;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+  }
+  .btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .btn-success { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .btn-success:hover { background: var(--vscode-button-hoverBackground); }
+  .btn-muted { opacity: 0.7; }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .stat-card {
+    background: var(--vscode-editor-background);
+    border-radius: 4px;
+    padding: 8px 10px;
+    text-align: center;
+  }
+  .stat-value { font-size: 1.15em; font-weight: 600; }
+  .stat-label { font-size: 0.75em; opacity: 0.6; margin-top: 2px; }
+
+  .tag {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 0.85em;
+  }
+  .tag-ok { background: rgba(80,200,120,0.15); }
+  .tag-warn { background: rgba(255,200,50,0.15); }
+  .tag-err { background: rgba(255,80,80,0.15); }
+  .clickable { cursor: pointer; }
+  .clickable:hover { opacity: 0.8; }
+
+  .footer {
+    margin-top: 12px;
+    font-size: 0.8em;
+    opacity: 0.5;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div class="status-banner ${escHtml(statusClass)}">
+    <span class="icon">${statusIcon}</span>${escHtml(statusText)}
+  </div>
+
+  ${s.state === "running" ? `
+  <div class="session-info">
+    ${s.sessions.length} session${s.sessions.length !== 1 ? "s" : ""} · ${s.working} working · ${s.waitingForInput} waiting
+  </div>` : (s.error ? `<div class="session-info">${escHtml(s.error)}</div>` : "")}
+
+  <div class="section-label">Controls</div>
+  <div class="btn-group">
+    ${serverBtn}
+    ${pauseBtn}
+    ${suspendBtn}
+    ${pomBtn}
+  </div>
+
+  <div class="section-label">Today</div>
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-value">${escHtml(fmtMs(today.blockingMs))}</div><div class="stat-label">Blocked</div></div>
+    <div class="stat-card"><div class="stat-value">${escHtml(fmtMs(today.unblockedMs))}</div><div class="stat-label">Unblocked</div></div>
+    <div class="stat-card"><div class="stat-value">${today.sessionCount}</div><div class="stat-label">Sessions</div></div>
+    <div class="stat-card"><div class="stat-value">${today.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
+  </div>
+
+  <div class="section-label">All Time</div>
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-value">${escHtml(fmtMs(all.blockingMs))}</div><div class="stat-label">Blocked</div></div>
+    <div class="stat-card"><div class="stat-value">${all.sessionCount}</div><div class="stat-label">Sessions</div></div>
+    <div class="stat-card"><div class="stat-value">${all.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
+    <div class="stat-card"><div class="stat-value">${all.days}</div><div class="stat-label">Days</div></div>
+  </div>
+
+  <div class="section-label">Setup</div>
+  ${hookHtml}
+  <div class="footer">Port ${this.port}</div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    function cmd(command) { vscode.postMessage({ command }); }
+  </script>
+</body>
+</html>`;
   }
 
   dispose(): void {
     for (const u of this.unsubs) u();
-    this._onDidChangeTreeData.dispose();
   }
 }

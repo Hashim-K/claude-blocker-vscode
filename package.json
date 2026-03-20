@@ -33,10 +33,7 @@
     },
     "views": {
       "claude-blocker": [
-        { "id": "claude-blocker.status", "name": "Status" },
-        { "id": "claude-blocker.controls", "name": "Controls" },
-        { "id": "claude-blocker.stats", "name": "Stats" },
-        { "id": "claude-blocker.setup", "name": "Setup" }
+        { "type": "webview", "id": "claude-blocker.panel", "name": "Claude Blocker" }
       ]
     },
     "configuration": {
