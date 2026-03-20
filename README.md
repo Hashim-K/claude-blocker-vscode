@@ -1,71 +1,103 @@
-# claude-blocker README
+# Claude Blocker for VS Code
 
-This is the README for your extension "claude-blocker". After writing up a brief description, we recommend including the following sections.
+Block distracting websites while Claude Code is working. Automatically unblock when Claude needs your input. Includes pause, suspend, pomodoro timer, and session stats.
+
+Compatible with both [Claude Blocker](https://github.com/T3-Content/claude-blocker) and [Claude Blocker Advanced](https://github.com/genesiscz/claude-blocker-advanced) Chrome extensions.
+
+## How It Works
+
+1. The extension runs a WebSocket server that the Chrome extension connects to
+2. Claude Code hooks report session activity (working, waiting for input, idle) to the server
+3. The Chrome extension blocks/unblocks sites based on Claude's status
+
+When Claude is **working** → sites are unblocked so you can browse freely.
+When Claude **stops** → sites are blocked to keep you focused.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- **Auto-blocking** — sites blocked when Claude isn't working, unblocked when it is
+- **Pause / Resume** — manually unblock sites
+- **Suspend** — unblock for a set duration (5, 10, 15, 30 min or custom)
+- **Pomodoro timer** — configurable active/break cycles that auto-pause/resume blocking
+- **Active Sessions** — see all running Claude Code instances with status, tool count, elapsed time
+- **Activity Timeline** — visual history of session activity over the last 4 hours
+- **Stats** — daily and all-time tracking of blocking time, sessions, pomodoros
+- **Sound notifications** — per-event configurable sounds with individual volume control and custom sound support
+- **Toast notifications** — VS Code info messages on state changes
+- **Status bar** — click for quick actions
+- **Sidebar panel** — full dashboard in the activity bar
 
-For example if there is an image subfolder under your extension project workspace:
+## Setup
 
-\!\[feature X\]\(images/feature-x.png\)
+1. Install this extension
+2. Install the [Claude Blocker](https://github.com/T3-Content/claude-blocker) or [Claude Blocker Advanced](https://github.com/genesiscz/claude-blocker-advanced) Chrome extension
+3. On first launch, the extension will prompt to install Claude Code hooks — click **Set up now**
+4. The server starts automatically on port 8765
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+The hooks configure Claude Code to send session events (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`) to the local server.
 
-## Requirements
+## Commands
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+All commands are available via the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`):
 
-## Extension Settings
+| Command | Description |
+|---------|-------------|
+| Claude Blocker: Start Server | Start the WebSocket server |
+| Claude Blocker: Stop Server | Stop the server |
+| Claude Blocker: Pause | Pause blocking (sites unblocked) |
+| Claude Blocker: Resume | Resume blocking |
+| Claude Blocker: Suspend for X Minutes... | Unblock for a set duration |
+| Claude Blocker: Start Pomodoro | Start pomodoro timer |
+| Claude Blocker: Stop Pomodoro | Stop pomodoro timer |
+| Claude Blocker: Toggle Pomodoro | Toggle pomodoro on/off |
+| Claude Blocker: Toggle Sound | Enable/disable sound notifications |
+| Claude Blocker: Show Stats | Show blocking stats |
+| Claude Blocker: Setup Hooks | Install Claude Code hooks |
+| Claude Blocker: Remove Hooks | Remove Claude Code hooks |
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+## Settings
 
-For example:
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `claudeBlocker.port` | `8765` | Server port |
+| `claudeBlocker.autoStart` | `true` | Start server on activation |
+| `claudeBlocker.pomodoro.activeMinutes` | `25` | Pomodoro active phase (minutes) |
+| `claudeBlocker.pomodoro.breakMinutes` | `5` | Pomodoro break phase (minutes) |
+| `claudeBlocker.suspendPresets` | `[5, 10, 15, 30]` | Suspend duration presets (minutes) |
 
-This extension contributes the following settings:
+### Sound Settings
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+Each notification event has its own sound, volume, and optional custom file path:
 
-## Known Issues
+| Event | Setting prefix | Default sound |
+|-------|---------------|---------------|
+| Claude stops working | `claudeBlocker.notifications.sound.onStopWorking` | `notification-unctuous` |
+| Waiting for input | `claudeBlocker.notifications.sound.onWaitingForInput` | `notification-unctuous` |
+| Pomodoro phase change | `claudeBlocker.notifications.sound.onPomodoroSwitch` | `marimba-ascending` |
+| Suspend expired | `claudeBlocker.notifications.sound.onSuspendExpired` | `notification-unctuous` |
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+Each event has `.sound`, `.volume` (0-100), and `.customPath` sub-settings. Set sound to `custom` and provide a `customPath` to use your own audio file.
 
-## Release Notes
+**Bundled sounds:** `notification-unctuous`, `bright-bell`, `marimba-ascending`, `dry-bongos`, `message-notification`, `notification-sound`
 
-Users appreciate release notes as you update your extension.
+Sounds sourced from [Freesound](https://freesound.org).
 
-### 1.0.0
+## Architecture
 
-Initial release of ...
+- **Worker thread server** — runs inside VS Code's Node.js runtime (no external dependencies)
+- **WebSocket + HTTP** — Chrome extensions connect via WebSocket, hooks POST to `/hook`
+- **Fake session injection** — pause/suspend works by injecting a synthetic "working" session so the Chrome extension thinks Claude is active
+- **esbuild** — dual-bundle build: `out/extension.js` (main) + `out/server-worker.js` (worker with `ws` bundled)
 
-### 1.0.1
+## Development
 
-Fixed issue #.
+```bash
+npm install
+npm run compile    # build with esbuild
+```
 
-### 1.1.0
+Press F5 to launch the Extension Development Host.
 
-Added features X, Y, and Z.
+## License
 
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+MIT
