@@ -114,11 +114,14 @@ export class NotificationManager {
     try {
       const os = platform();
       if (os === "darwin") {
-        execFile("afplay", ["-v", String(volume / 100), soundFile]);
+        execFile("afplay", ["-v", String(volume / 100), soundFile], () => {});
       } else if (os === "linux") {
-        execFile("paplay", [soundFile], (err) => { if (err) execFile("aplay", [soundFile]); });
+        const paVol = String(Math.round(volume / 100 * 65536));
+        execFile("paplay", ["--volume", paVol, soundFile], (err) => {
+          if (err) execFile("aplay", [soundFile], () => {});
+        });
       } else if (os === "win32") {
-        execFile("powershell", ["-c", `(New-Object Media.SoundPlayer '${soundFile}').PlaySync()`]);
+        execFile("powershell", ["-c", `(New-Object Media.SoundPlayer '${soundFile}').PlaySync()`], () => {});
       }
     } catch { /* best-effort */ }
   }

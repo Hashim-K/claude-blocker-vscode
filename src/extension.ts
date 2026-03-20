@@ -34,13 +34,23 @@ export function activate(context: vscode.ExtensionContext) {
   // Notification triggers
   let prevWorking = 0;
   let prevWaiting = 0;
+  let waitingTimer: ReturnType<typeof setTimeout> | null = null;
   server.onStateChange((status) => {
     if (status.state !== "running") return;
-    if (prevWorking > 0 && status.working === 0 && blocker.state === "active") {
+    if (prevWorking > 0 && status.working === 0 && status.waitingForInput === 0 && blocker.state === "active") {
       notifications.onStopWorking();
     }
     if (prevWaiting === 0 && status.waitingForInput > 0) {
-      notifications.onWaitingForInput();
+      // Debounce: only notify if still waiting after 5s (filters auto-approved tools)
+      waitingTimer = setTimeout(() => {
+        if (server.status.waitingForInput > 0) {
+          notifications.onWaitingForInput();
+        }
+      }, 5000);
+    }
+    if (prevWaiting > 0 && status.waitingForInput === 0 && waitingTimer) {
+      clearTimeout(waitingTimer);
+      waitingTimer = null;
     }
     prevWorking = status.working;
     prevWaiting = status.waitingForInput;
@@ -146,10 +156,11 @@ export function activate(context: vscode.ExtensionContext) {
   // Auto-start
   if (autoStart) server.start();
 
-  // Check hooks
+  // Prompt to install hooks if missing or incomplete
   const hookStatus = areHooksConfigured(port);
-  if (hookStatus === "not-installed") {
-    vscode.window.showInformationMessage("Claude Blocker needs to configure Claude Code hooks.", "Set up now").then(action => {
+  if (hookStatus === "not-installed" || hookStatus === "incomplete") {
+    const label = hookStatus === "incomplete" ? "Some Claude Code hooks are missing." : "Claude Blocker needs to configure Claude Code hooks.";
+    vscode.window.showInformationMessage(label, "Set up now").then(action => {
       if (action === "Set up now") { setupHooks(port); vscode.window.showInformationMessage("Hooks installed!"); refreshAll(); }
     });
   } else if (hookStatus === "wrong-port") {

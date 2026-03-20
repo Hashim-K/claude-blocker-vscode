@@ -71,18 +71,10 @@ export class SessionState {
 
       case "PreToolUse": {
         const session = this.ensureSession(session_id, payload.cwd);
-        if (payload.tool_name && USER_INPUT_TOOLS.includes(payload.tool_name)) {
-          session.status = "waiting_for_input";
-          session.waitingForInputSince = new Date();
-        } else if (session.status === "waiting_for_input") {
-          const elapsed = Date.now() - (session.waitingForInputSince?.getTime() ?? 0);
-          if (elapsed > DEBOUNCE_MS) {
-            session.status = "working";
-            session.waitingForInputSince = undefined;
-          }
-        } else {
-          session.status = "working";
-        }
+        // Set waiting_for_input — if auto-approved, PostToolUse follows quickly
+        // and sets back to working. If permission prompt shows, this stays.
+        session.status = "waiting_for_input";
+        session.waitingForInputSince = session.waitingForInputSince ?? new Date();
         if (payload.tool_name) {
           session.lastTool = payload.tool_name;
           session.toolCount++;
@@ -100,6 +92,9 @@ export class SessionState {
       case "PostToolUse": {
         const session = this.sessions.get(session_id);
         if (session) {
+          // Tool was approved and ran — back to working
+          session.status = "working";
+          session.waitingForInputSince = undefined;
           if (payload.input_tokens) session.inputTokens += payload.input_tokens;
           if (payload.output_tokens) session.outputTokens += payload.output_tokens;
           if (payload.cost_usd) session.costUsd += payload.cost_usd;
@@ -111,15 +106,8 @@ export class SessionState {
 
       case "Stop": {
         const session = this.ensureSession(session_id, payload.cwd);
-        if (session.status === "waiting_for_input") {
-          const elapsed = Date.now() - (session.waitingForInputSince?.getTime() ?? 0);
-          if (elapsed > DEBOUNCE_MS) {
-            session.status = "idle";
-            session.waitingForInputSince = undefined;
-          }
-        } else {
-          session.status = "idle";
-        }
+        session.status = "idle";
+        session.waitingForInputSince = undefined;
         session.lastActivity = new Date();
         break;
       }

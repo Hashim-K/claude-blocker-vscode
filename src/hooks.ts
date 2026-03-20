@@ -33,18 +33,31 @@ function buildHooksConfig(port: number): Record<string, unknown[]> {
   return config;
 }
 
-export function areHooksConfigured(port: number): "installed" | "wrong-port" | "not-installed" {
+export function areHooksConfigured(port: number): "installed" | "wrong-port" | "not-installed" | "incomplete" {
   const settingsPath = getSettingsPath();
   if (!existsSync(settingsPath)) return "not-installed";
   try {
     const settings: ClaudeSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
     if (!settings.hooks) return "not-installed";
-    const hasAny = HOOK_EVENTS.some(e => e in settings.hooks!);
-    if (!hasAny) return "not-installed";
     const hookStr = JSON.stringify(settings.hooks);
-    if (hookStr.includes(`localhost:${port}/hook`)) return "installed";
-    return "wrong-port";
+    const hasPort = hookStr.includes(`localhost:${port}/hook`);
+    if (!hasPort) {
+      const hasAny = HOOK_EVENTS.some(e => e in settings.hooks!);
+      return hasAny ? "wrong-port" : "not-installed";
+    }
+    const hasAll = HOOK_EVENTS.every(e => e in settings.hooks!);
+    return hasAll ? "installed" : "incomplete";
   } catch { return "not-installed"; }
+}
+
+export function getMissingHooks(): string[] {
+  const settingsPath = getSettingsPath();
+  if (!existsSync(settingsPath)) return [...HOOK_EVENTS];
+  try {
+    const settings: ClaudeSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    if (!settings.hooks) return [...HOOK_EVENTS];
+    return HOOK_EVENTS.filter(e => !(e in settings.hooks!));
+  } catch { return [...HOOK_EVENTS]; }
 }
 
 export function setupHooks(port: number): void {
@@ -56,7 +69,24 @@ export function setupHooks(port: number): void {
   if (existsSync(settingsPath)) {
     try { settings = JSON.parse(readFileSync(settingsPath, "utf-8")); } catch { /* start fresh */ }
   }
-  settings.hooks = { ...settings.hooks, ...buildHooksConfig(port) };
+  if (!settings.hooks) settings.hooks = {};
+
+  const command = makeHookCommand(port);
+  const newConfig = buildHooksConfig(port);
+
+  // Append our hook entries to existing hooks rather than replacing them
+  for (const event of HOOK_EVENTS) {
+    const existing = (settings.hooks[event] as unknown[]) ?? [];
+    // Remove any previous claude-blocker entries (by matching our curl pattern)
+    const filtered = existing.filter((entry: any) => {
+      const hooks = entry?.hooks ?? [];
+      return !hooks.some((h: any) => h?.command?.includes("/hook") && h?.command?.includes("localhost:"));
+    });
+    // Append our entry
+    filtered.push(...newConfig[event]);
+    settings.hooks[event] = filtered;
+  }
+
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 

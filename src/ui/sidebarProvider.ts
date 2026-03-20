@@ -5,7 +5,7 @@ import type { Pomodoro } from "../pomodoro.js";
 import type { StatsTracker } from "../stats.js";
 import type { ActivityTracker } from "../activityTracker.js";
 import type { Session } from "../server/types.js";
-import { areHooksConfigured } from "../hooks.js";
+import { areHooksConfigured, getMissingHooks } from "../hooks.js";
 
 function fmtMs(ms: number): string {
   const mins = Math.floor(ms / 60000);
@@ -229,7 +229,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     // Hook status
     let hookHtml: string;
     if (hookStatus === "installed") {
-      hookHtml = `<span class="tag tag-ok">✓ Hooks installed</span>`;
+      hookHtml = `<span class="tag tag-ok">✓ Hooks installed · Port ${this.port}</span>`;
+    } else if (hookStatus === "incomplete") {
+      const missing = getMissingHooks();
+      hookHtml = `<span class="tag tag-warn clickable" onclick="cmd('claude-blocker.setupHooks')">⚠ Missing hooks: ${missing.join(", ")} — click to fix</span>`;
     } else if (hookStatus === "wrong-port") {
       hookHtml = `<span class="tag tag-warn clickable" onclick="cmd('claude-blocker.setupHooks')">⚠ Wrong port — click to fix</span>`;
     } else {
@@ -269,7 +272,44 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   .status-banner.error { background: var(--vscode-inputValidation-errorBackground, rgba(255,80,80,0.15)); }
   .status-banner.starting { background: var(--vscode-inputValidation-warningBackground, rgba(255,200,50,0.1)); opacity: 0.7; }
 
-  /* Section labels */
+  /* Accordion sections */
+  .accordion {
+    margin-top: 10px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: var(--vscode-editor-background);
+  }
+  .accordion-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.8;
+    background: var(--vscode-editor-background);
+  }
+  .accordion-header:hover { opacity: 1; }
+  .accordion-chevron {
+    transition: transform 0.15s ease;
+    font-size: 0.9em;
+  }
+  .accordion.collapsed .accordion-chevron { transform: rotate(-90deg); }
+  .accordion.collapsed .accordion-body { display: none; }
+  .accordion-body { padding: 0 10px 10px; }
+  .accordion-badge {
+    font-size: 0.85em;
+    opacity: 0.5;
+    margin-left: 6px;
+    font-weight: normal;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* Section labels (non-accordion) */
   .section-label {
     font-size: 0.75em;
     text-transform: uppercase;
@@ -412,7 +452,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
   .timeline-bar {
     position: relative;
-    height: 6px;
+    height: 10px;
     background: var(--vscode-editor-background);
     border-radius: 3px;
     overflow: hidden;
@@ -477,61 +517,118 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     ${suspendBtn}
   </div>
 
-  <div class="section-label">Pomodoro</div>
-  <div class="pom-config">
-    <div class="pom-field" onclick="cmd('claude-blocker.setPomodoroActive')">
-      <span>🟢</span>
-      <span class="pom-value">${pomActiveMin}</span>
-      <span class="pom-unit">min active</span>
+  <div class="accordion" data-id="pomodoro">
+    <div class="accordion-header" onclick="toggle('pomodoro')">
+      <span>🍅 Pomodoro</span>
+      <span class="accordion-chevron">▾</span>
     </div>
-    <div class="pom-field" onclick="cmd('claude-blocker.setPomodoroBreak')">
-      <span>☕</span>
-      <span class="pom-value">${pomBreakMin}</span>
-      <span class="pom-unit">min break</span>
+    <div class="accordion-body">
+      <div class="pom-config">
+        <div class="pom-field" onclick="cmd('claude-blocker.setPomodoroActive')">
+          <span>🟢</span>
+          <span class="pom-value">${pomActiveMin}</span>
+          <span class="pom-unit">min active</span>
+        </div>
+        <div class="pom-field" onclick="cmd('claude-blocker.setPomodoroBreak')">
+          <span>☕</span>
+          <span class="pom-value">${pomBreakMin}</span>
+          <span class="pom-unit">min break</span>
+        </div>
+      </div>
+      ${pomBtn}
     </div>
   </div>
-  ${pomBtn}
 
-  <div class="section-label">Active Sessions</div>
-  ${sessionsHtml}
-
-  <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
-    <span>Activity Timeline</span>
-    <span class="timeline-legend">
-      <span class="legend-item"><span class="legend-dot" style="background:#4ec958"></span> Working</span>
-      <span class="legend-item"><span class="legend-dot" style="background:#e8a838"></span> Waiting</span>
-      <span class="legend-item"><span class="legend-dot" style="background:#555"></span> Idle</span>
-    </span>
-  </div>
-  ${timelineHtml}
-
-  <div class="section-label">Today</div>
-  <div class="stats-grid">
-    <div class="stat-card"><div class="stat-value">${esc(fmtMs(today.blockingMs))}</div><div class="stat-label">Blocked</div></div>
-    <div class="stat-card"><div class="stat-value">${esc(fmtMs(today.unblockedMs))}</div><div class="stat-label">Unblocked</div></div>
-    <div class="stat-card"><div class="stat-value">${today.sessionCount}</div><div class="stat-label">Sessions</div></div>
-    <div class="stat-card"><div class="stat-value">${today.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
+  <div class="accordion" data-id="sessions">
+    <div class="accordion-header" onclick="toggle('sessions')">
+      <span>Active Sessions<span class="accordion-badge">${realSessions.length}</span></span>
+      <span class="accordion-chevron">▾</span>
+    </div>
+    <div class="accordion-body">
+      ${sessionsHtml}
+    </div>
   </div>
 
-  <div class="section-label">All Time</div>
-  <div class="stats-grid">
-    <div class="stat-card"><div class="stat-value">${esc(fmtMs(all.blockingMs))}</div><div class="stat-label">Blocked</div></div>
-    <div class="stat-card"><div class="stat-value">${all.sessionCount}</div><div class="stat-label">Sessions</div></div>
-    <div class="stat-card"><div class="stat-value">${all.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
-    <div class="stat-card"><div class="stat-value">${all.days}</div><div class="stat-label">Days</div></div>
+  <div class="accordion" data-id="timeline">
+    <div class="accordion-header" onclick="toggle('timeline')">
+      <span>Activity Timeline</span>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span class="timeline-legend">
+          <span class="legend-item"><span class="legend-dot" style="background:#4ec958"></span> Working</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#e8a838"></span> Waiting</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#555"></span> Idle</span>
+        </span>
+        <span class="accordion-chevron">▾</span>
+      </span>
+    </div>
+    <div class="accordion-body">
+      ${timelineHtml}
+    </div>
   </div>
 
-  <div class="section-label">Setup</div>
-  ${hookHtml}
-  <div class="btn-row" style="margin-top:6px">
-    <button class="btn" onclick="cmd('claude-blocker.openSettings')">⚙ Settings</button>
-    <button class="btn" onclick="cmd('claude-blocker.testSound')">🔊 Test Sound</button>
+  <div class="accordion" data-id="today">
+    <div class="accordion-header" onclick="toggle('today')">
+      <span>Today</span>
+      <span class="accordion-chevron">▾</span>
+    </div>
+    <div class="accordion-body">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-value">${esc(fmtMs(today.blockingMs))}</div><div class="stat-label">Blocked</div></div>
+        <div class="stat-card"><div class="stat-value">${esc(fmtMs(today.unblockedMs))}</div><div class="stat-label">Unblocked</div></div>
+        <div class="stat-card"><div class="stat-value">${today.sessionCount}</div><div class="stat-label">Sessions</div></div>
+        <div class="stat-card"><div class="stat-value">${today.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
+      </div>
+    </div>
   </div>
-  <div class="footer">Port ${this.port}</div>
+
+  <div class="accordion" data-id="alltime">
+    <div class="accordion-header" onclick="toggle('alltime')">
+      <span>All Time</span>
+      <span class="accordion-chevron">▾</span>
+    </div>
+    <div class="accordion-body">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-value">${esc(fmtMs(all.blockingMs))}</div><div class="stat-label">Blocked</div></div>
+        <div class="stat-card"><div class="stat-value">${all.sessionCount}</div><div class="stat-label">Sessions</div></div>
+        <div class="stat-card"><div class="stat-value">${all.pomodoroCount}</div><div class="stat-label">Pomodoros</div></div>
+        <div class="stat-card"><div class="stat-value">${all.days}</div><div class="stat-label">Days</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="accordion" data-id="setup">
+    <div class="accordion-header" onclick="toggle('setup')">
+      <span>Setup</span>
+      <span class="accordion-chevron">▾</span>
+    </div>
+    <div class="accordion-body">
+      <div class="btn-row">
+        <button class="btn" onclick="cmd('claude-blocker.openSettings')">⚙ Settings</button>
+        <button class="btn" onclick="cmd('claude-blocker.testSound')">🔊 Test Sound</button>
+      </div>
+      <div style="margin-top:8px">${hookHtml}</div>
+    </div>
+  </div>
 
   <script>
     const vscode = acquireVsCodeApi();
     function cmd(command) { vscode.postMessage({ command }); }
+
+    // Persist accordion state across re-renders
+    const state = vscode.getState() || { collapsed: {} };
+    function toggle(id) {
+      state.collapsed[id] = !state.collapsed[id];
+      vscode.setState(state);
+      const el = document.querySelector('[data-id="' + id + '"]');
+      if (el) el.classList.toggle('collapsed');
+    }
+    // Restore collapsed state on load
+    for (const [id, collapsed] of Object.entries(state.collapsed)) {
+      if (collapsed) {
+        const el = document.querySelector('[data-id="' + id + '"]');
+        if (el) el.classList.add('collapsed');
+      }
+    }
   </script>
 </body>
 </html>`;

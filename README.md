@@ -31,10 +31,45 @@ When Claude **stops** → sites are blocked to keep you focused.
 
 1. Install this extension
 2. Install the [Claude Blocker](https://github.com/T3-Content/claude-blocker) or [Claude Blocker Advanced](https://github.com/genesiscz/claude-blocker-advanced) Chrome extension
-3. On first launch, the extension will prompt to install Claude Code hooks — click **Set up now**
+3. Install Claude Code hooks (see below)
 4. The server starts automatically on port 8765
 
-The hooks configure Claude Code to send session events (`SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`) to the local server.
+### Installing Hooks
+
+Claude Code hooks tell the server about session activity. You can install them automatically or manually.
+
+**Automatic:** On first launch, the extension prompts to install hooks — click **Set up now**. You can also run `Claude Blocker: Setup Hooks` from the command palette, or click the hooks status badge in the sidebar Setup section.
+
+**Manual:** Add the following to `~/.claude/settings.json` under `"hooks"`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "curl -s -X POST http://localhost:8765/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1 &" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "curl -s -X POST http://localhost:8765/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1 &" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "curl -s -X POST http://localhost:8765/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1 &" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "curl -s -X POST http://localhost:8765/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1 &" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "curl -s -X POST http://localhost:8765/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1 &" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "curl -s -X POST http://localhost:8765/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1 &" }] }
+    ]
+  }
+}
+```
+
+If you already have hooks configured, add the claude-blocker entries alongside your existing ones — each event supports an array of hook entries.
+
+The required events are: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`.
 
 ## Commands
 
