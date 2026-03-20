@@ -4,6 +4,25 @@ Block distracting websites while Claude Code is working. Automatically unblock w
 
 Compatible with both [Claude Blocker](https://github.com/T3-Content/claude-blocker) and [Claude Blocker Advanced](https://github.com/genesiscz/claude-blocker-advanced) Chrome extensions.
 
+## Install
+
+**From the Marketplace:**
+
+[![Install from VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/hashim-karim.claude-blocker-vscode?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=hashim-karim.claude-blocker-vscode)
+
+1. Open VS Code
+2. Go to Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+3. Search for **"Claude Blocker"**
+4. Click **Install**
+
+Or install directly: [Claude Blocker on VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=hashim-karim.claude-blocker-vscode)
+
+**From the command line:**
+
+```bash
+code --install-extension hashim-karim.claude-blocker-vscode
+```
+
 ## How It Works
 
 1. The extension runs a WebSocket server that the Chrome extension connects to
