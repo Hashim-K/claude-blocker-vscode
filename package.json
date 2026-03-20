@@ -2,7 +2,7 @@
   "name": "claude-blocker-vscode",
   "displayName": "Claude Blocker",
   "description": "Block distracting websites when Claude Code isn't working. Pause, suspend, pomodoro, stats.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "hashim-karim",
   "license": "MIT",
   "icon": "media/icon.png",
